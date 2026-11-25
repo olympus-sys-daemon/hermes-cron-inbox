@@ -12,13 +12,36 @@ configuration, and no second copy of your data to drift.
 | Surface | Result |
 |---|---|
 | Sidebar row | **Cron Inbox** — appears after the desktop half is switched on (see Install) |
-| Page `/inbox` | chronological feed of runs across every profile |
+| Page `/inbox` | dashboard of jobs, each showing its latest report in full |
 | Status bar chip | unread count, turns destructive on unread failures |
 | ⌘K command | "Open Cron Inbox" |
 | OS notification | one per batch of newly-arrived reports |
 
-Plus read/unread state, per-run mute, search, and three filters (All / Unread / Errors) with a
-Reported / Everything scope switch.
+### The page is a dashboard, not a log
+
+The first version listed runs: one row per document, a two-line preview, the actual report behind a
+click. That made the reader do the work — to learn what a watcher currently says you had to open a
+row, remember it, go back, open the next.
+
+Now it is **one card per job**, and each card carries its newest reported run as text. Reading the
+page *is* reading the reports. A click is only needed for run history or the untruncated tail of a
+long report.
+
+What a card shows:
+
+- the job name, its schedule, and how many runs it has
+- **the report itself**, monospace and line-preserved, clamped at ~14 lines with "Show full report"
+  when there is more (bodies run from a few hundred bytes to ~250 KB)
+- a row of **run dots** — one per recent run, red for a failure, filled for unread, hollow for silent
+- `N unread` / `N failed` only when non-zero, so a healthy job's footer stays quiet
+- actions (mark read, history, mute) that appear on hover rather than at rest
+
+Cards are ordered by **attention, not time**: errors first, then unread, then the rest, newest within
+each group. Filters are All / Unread / Errors, plus search. The Reported / Everything switch is gone —
+silent runs are hidden always, since a feed of nothing is a feed nobody reads. The API keeps an
+`include_silent` flag for the scope.
+
+Plus read/unread state, per-run mute, and search.
 
 ### OS notifications
 
@@ -193,12 +216,13 @@ archive: read-state for documents cron has pruned is dropped on the next scan.
 
 ## API
 
-All routes mount under `/api/plugins/hermes-inbox/`.
+All routes mount under `/api/plugins/hermes-cron-inbox/`.
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/health` | root path, profiles seen, cron homes found |
-| `GET` | `/items` | feed — `limit`, `offset`, `unread_only`, `include_silent`, `include_muted`, `errors_only`, `profile`, `job_id`, `q` |
+| `GET` | `/feed` | **dashboard shape** — one card per job with its latest body; `limit`, `include_silent`, `include_muted`, `errors_only`, `unread_only`, `q`, `body_limit` |
+| `GET` | `/items` | log shape — one row per run, newest first; `limit`, `offset`, `unread_only`, `include_silent`, `include_muted`, `errors_only`, `profile`, `job_id`, `q` |
 | `GET` | `/items/{id}` | one run with its full body and source path |
 | `POST` | `/items/{id}/read` | `{read: bool}` |
 | `POST` | `/items/{id}/mute` | `{muted: bool}` |

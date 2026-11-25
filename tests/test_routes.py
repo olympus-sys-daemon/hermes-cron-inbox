@@ -65,8 +65,9 @@ VISIBLE = """# Cron Job: loud watcher
 **Run Time:** 2026-11-25 13:59:19
 **Mode:** no_agent (script)
 
----
-
+────────────────────────────────────────────────
+loud watcher · 2026-11-25 13:59 UTC
+────────────────────────────────────────────────
 Found a match: 77.4%
 """
 
@@ -234,6 +235,89 @@ def test_config_route_clamps_and_coerces():
     """A hand-edited config must not break the page: bad values fall back."""
     assert api._settings()["poll_seconds"] >= 10
     assert isinstance(api._settings()["include_silent_by_default"], bool)
+
+
+# --------------------------------------------------------------------------- #
+# /feed - the dashboard shape
+# --------------------------------------------------------------------------- #
+
+
+def test_feed_groups_runs_into_one_card_per_job():
+    body = client.get("/api/plugins/hermes-cron-inbox/feed").json()
+    assert body["cards"], "feed returned no cards"
+    keys = [(c["profile"], c["job_id"]) for c in body["cards"]]
+    assert len(keys) == len(set(keys)), "a job appeared twice: grouping is per run, not per job"
+    # The loud watcher has several runs; the card still appears once.
+    loud = [c for c in body["cards"] if c["job_name"] == "loud watcher"]
+    assert len(loud) == 1
+    assert loud[0]["runs"] >= 1
+
+
+def test_feed_ships_the_latest_body_so_no_click_is_needed():
+    body = client.get("/api/plugins/hermes-cron-inbox/feed").json()
+    card = next(c for c in body["cards"] if c["job_name"] == "loud watcher")
+    # The substance of the report is IN the card, not behind an id.
+    assert "77.4%" in card["body"], f"card body missing the report text: {card['body'][:120]!r}"
+    assert card["latest_id"]
+    assert "recent" in card and card["recent"]
+
+
+def test_feed_body_is_cleaned_of_banner_furniture():
+    body = client.get("/api/plugins/hermes-cron-inbox/feed").json()
+    card = next(c for c in body["cards"] if c["job_name"] == "loud watcher")
+    first = card["body"].splitlines()[0].strip()
+    # A leading rule or a bare repeat of the job name would waste the first line
+    # of every card saying nothing the header has not already said.
+    assert not set(first) <= set("─━═-=_*#~·. "), f"banner rule survived: {first!r}"
+    assert first.casefold() != "loud watcher"
+
+
+def test_feed_unread_ignores_silent_runs():
+    # A silent run is never displayed, so it must not make a card claim "New".
+    for card in client.get("/api/plugins/hermes-cron-inbox/feed?include_silent=true").json()["cards"]:
+        if card["unread"]:
+            assert card["unread_runs"] > 0, (
+                f"{card['job_name']} says unread but its own footer counts 0 unread"
+            )
+
+
+def test_feed_hides_jobs_whose_runs_were_all_silent():
+    body = client.get("/api/plugins/hermes-cron-inbox/feed").json()
+    names = {c["job_name"] for c in body["cards"]}
+    assert "quiet watcher" not in names
+    # ...but Everything shows it.
+    everything = client.get(
+        "/api/plugins/hermes-cron-inbox/feed?include_silent=true"
+    ).json()
+    assert "quiet watcher" in {c["job_name"] for c in everything["cards"]}
+
+
+def test_feed_body_limit_is_a_per_card_budget():
+    tiny = client.get("/api/plugins/hermes-cron-inbox/feed?body_limit=200").json()
+    assert tiny["cards"], "feed returned no cards"
+    for card in tiny["cards"]:
+        assert len(card["body"]) <= 200, f"{card['job_name']} exceeded the body budget"
+        if card["truncated"]:
+            assert card["chars"] > 200
+
+
+def test_feed_search_matches_job_name():
+    body = client.get("/api/plugins/hermes-cron-inbox/feed?q=loud").json()
+    assert [c["job_name"] for c in body["cards"]] == ["loud watcher"]
+
+    none = client.get("/api/plugins/hermes-cron-inbox/feed?q=zzzznomatch").json()
+    assert none["cards"] == []
+
+
+def test_feed_leads_with_what_needs_attention():
+    # Errors first, then unread, then the rest - a dashboard's job is to order by
+    # attention, not by timestamp.
+    cards = client.get("/api/plugins/hermes-cron-inbox/feed?include_silent=true").json()["cards"]
+    rank = [
+        0 if c["error"] and c["unread"] else 1 if c["error"] else 2 if c["unread"] else 3
+        for c in cards
+    ]
+    assert rank == sorted(rank), f"cards are not ordered by attention: {rank}"
 
 
 def test_unknown_item_404s():

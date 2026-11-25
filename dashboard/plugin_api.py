@@ -47,6 +47,10 @@ _STAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$")
 # A run which did not need to wake anyone. Kept as a prefix test against the
 # status line only — never against the body, where a job may quote these words.
 _SILENT_PREFIXES = ("silent", "no_change")
+# A run banner such as "PortWatch VI · 2026-11-25 16:03 UTC" - a date inside a
+# short line that is not a list item. Card headers already carry the job name and
+# time, so this is furniture there.
+_BANNER_DATE = re.compile(r"\d{4}-\d{2}-\d{2}|\b\d{1,2}:\d{2}\b")
 _ERROR_PREFIXES = ("script failed", "blocked", "error", "failed")
 _SILENCE_TOKENS = ("[silent]", "silent", "no_reply", "no reply")
 
@@ -386,6 +390,40 @@ def _scan(include_silent: bool) -> list[dict[str, Any]]:
     return items
 
 
+def _clean_body(body: str, job_name: str = "") -> str:
+    """A run body with its banner furniture removed for card display.
+
+    Script reports often open with a 48-character box-drawing rule and a title
+    banner that merely repeats the job name. In a card those cost two lines to
+    say nothing the header has not already said. Only LEADING decoration is
+    removed - rules later in the text are usually section separators, and cutting
+    them would join unrelated paragraphs.
+    """
+    lines = [line.rstrip() for line in (body or "").splitlines()]
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if not stripped:
+            i += 1
+            continue
+        is_rule = set(stripped) <= set("─━═-=_*#~·. ") and len(stripped) >= 3
+        is_dup_name = bool(job_name) and stripped.strip("#  ").casefold() == job_name.casefold()
+        # A banner line repeats what the card header already shows: the job name
+        # and the run time. Script reports commonly sandwich one between two
+        # rules, so treating it as furniture is what lets a single pass clear the
+        # whole block - the rule above it, the banner, and the rule below.
+        is_banner = (
+            len(stripped) <= 80
+            and not stripped.startswith(("•", "-", "*", ">", "|"))
+            and _BANNER_DATE.search(stripped) is not None
+        )
+        if is_rule or is_dup_name or is_banner:
+            i += 1
+            continue
+        break
+    return "\n".join(lines[i:]).strip()
+
+
 def _preview(body: str, limit: int = 220) -> str:
     """One-line preview of a run body.
 
@@ -522,6 +560,161 @@ async def list_items(
         "unread": unread_total,
         "all_docs": total_unfiltered,
     }
+
+
+@router.get("/feed")
+async def feed(
+    limit: int = 40,
+    include_silent: bool = False,
+    include_muted: bool = False,
+    errors_only: bool = False,
+    unread_only: bool = False,
+    q: str = "",
+    body_limit: int = 1800,
+) -> dict[str, Any]:
+    """Job-grouped view: one card per job carrying its LATEST run's text.
+
+    The list endpoint answers "what ran, newest first" — one row per document.
+    That is the right shape for a log and the wrong shape for reading: the thing
+    a person actually wants is "what does each watcher say right now", which is
+    one answer per job, not fifty rows in time order. Grouping here also means
+    the newest MESSAGE per job is visible without opening anything.
+
+    `body_limit` is a truncation budget per card, not per page: the bodies run
+    from a few hundred bytes to ~250 KB, so shipping them whole would be tens of
+    megabytes over the plugin host's 60 s budget. The full text stays one click
+    away via `/items/<id>`.
+    """
+    limit = max(1, min(limit, 120))
+    body_limit = max(200, min(body_limit, 8000))
+
+    items = _decorate(_scan(include_silent=True))
+
+    # Group by (profile, job_id) preserving each job's newest run.
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for item in items:
+        groups.setdefault((item["profile"], item["job_id"]), []).append(item)
+
+    cards: list[dict[str, Any]] = []
+    for (profile, job_id), runs in groups.items():
+        # `_scan` already sorts newest-first globally, so runs[0] is this job's
+        # latest.
+        latest = runs[0]
+        live = [r for r in runs if not r["silent"] and not r["muted"]]
+
+        if not include_muted and latest["muted"]:
+            continue
+        if not include_silent and not live:
+            # Every run of this job was silent: there is nothing to read.
+            continue
+        if errors_only and not any(r["error"] for r in runs[:50]):
+            continue
+        if unread_only and not any(r["unread"] for r in live):
+            continue
+
+        head = live[0] if live else latest
+
+        if q:
+            needle = q.strip().lower()
+            haystack = " ".join(
+                [head["job_name"], head["title"], head["preview"], profile]
+            ).lower()
+            if needle not in haystack:
+                continue
+
+        # The newest REPORTED run carries the text; a silent latest run should
+        # not blank a card that has something real underneath it.
+        shown = head if not head["silent"] else latest
+
+        try:
+            path = _document_path(profile, job_id, shown["stamp"])
+            parsed = _read_parsed(path) if path else None
+        except Exception:  # noqa: BLE001 - a vanished file must not kill the feed
+            parsed = None
+
+        body = _clean_body((parsed or {}).get("body", "") or "", head["job_name"])
+
+        cards.append({
+            "profile": profile,
+            "job_id": job_id,
+            "job_name": head["job_name"],
+            "orphan": head["orphan"],
+            "job_enabled": head["job_enabled"],
+            "schedule": head["schedule"],
+            "deliver": head["deliver"],
+            "mode": shown["mode"],
+            "is_script": shown["is_script"],
+            "stamp": shown["stamp"],
+            "run_time": shown["run_time"],
+            "status": shown["status"],
+            "silent": shown["silent"],
+            "error": shown["error"],
+            # Only REPORTED runs count: a silent run is never shown, so letting
+            # it set "unread" made a card claim "New" while its own footer read
+            # "0 unread".
+            "unread": any(r["unread"] for r in live),
+            "muted": latest["muted"],
+            "latest_id": shown["id"],
+            # Counters the card header shows without another call.
+            "runs": len(runs),
+            "unread_runs": sum(1 for r in runs if r["unread"] and not r["silent"]),
+            "error_runs": sum(1 for r in runs[:50] if r["error"]),
+            "body": body[:body_limit],
+            "truncated": len(body) > body_limit,
+            "chars": len(body),
+            "recent": [
+                {
+                    "id": r["id"],
+                    "stamp": r["stamp"],
+                    "unread": r["unread"],
+                    "error": r["error"],
+                    "silent": r["silent"],
+                    "muted": r["muted"],
+                    "preview": r["preview"][:160],
+                }
+                for r in runs[:6]
+            ],
+        })
+
+    # Errors first, then unread, then newest — a dashboard should lead with what
+    # needs attention, not with what happens to be most recent.
+    cards.sort(
+        key=lambda c: (
+            0 if c["error"] and c["unread"] else 1 if c["error"] else 2 if c["unread"] else 3,
+            -_stamp_sort_key(c["stamp"]),
+        )
+    )
+
+    total_unread = sum(1 for i in items if i["unread"] and not i["muted"] and not i["silent"])
+
+    return {
+        "cards": cards[:limit],
+        "jobs": len(cards),
+        "total_jobs": len(groups),
+        "unread": total_unread,
+        "errors": sum(1 for i in items if i["error"] and i["unread"] and not i["silent"]),
+        "silent": sum(1 for i in items if i["silent"]),
+        "all_docs": len(items),
+    }
+
+
+def _stamp_sort_key(stamp: str) -> int:
+    """Sort key for a `YYYY-MM-DD_HH-MM-SS` stamp. Unparseable sorts oldest."""
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})", stamp or "")
+    if not m:
+        return 0
+    y, mo, d, h, mi, s = (int(g) for g in m.groups())
+    return ((((y * 13 + mo) * 32 + d) * 24 + h) * 60 + mi) * 60 + s
+
+
+def _document_path(profile: str, job_id: str, stamp: str) -> Optional[Path]:
+    """Path of one run document, or None when the profile is not ours."""
+    for name, cron_dir in _cron_homes():
+        if name != profile:
+            continue
+        candidate = cron_dir / "output" / job_id / f"{stamp}.md"
+        return candidate if candidate.is_file() else None
+    return None
 
 
 @router.get("/summary")

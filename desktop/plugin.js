@@ -47,20 +47,17 @@ const FILTERS = [
   { id: 'errors', label: 'Errors' }
 ]
 
-const SCOPES = [
-  { id: 'visible', label: 'Reported' },
-  { id: 'everything', label: 'Everything' }
-]
-
 const LOCALES = {
   en: {
     nav: 'Inbox',
-    title: 'Inbox',
-    subtitle: jobs => (jobs === 1 ? '1 job' : `${jobs} jobs`),
-    search: 'Search runs…',
+    title: 'Cron Inbox',
+    subtitle: jobs => (jobs === 1 ? '1 job reporting' : `${jobs} jobs reporting`),
+    search: 'Search reports…',
     all: 'All',
     unread: 'Unread',
     errors: 'Errors',
+    new: 'New',
+    history: 'History',
     reported: 'Reported',
     everything: 'Everything',
     empty: 'Nothing to read',
@@ -133,92 +130,206 @@ function qs(params) {
   return text ? `?${text}` : ''
 }
 
-function useInbox(queryClient, params, pollMs) {
-  const path = `/items${qs(params)}`
-  const query = useQuery({
-    queryKey: [ID, 'items', path],
-    queryFn: () => ctxRest(path),
-    refetchInterval: pollMs
-  })
-
-  useEffect(() => {
-    return host.onEvent(CHANGED_EVENT, () => {
-      queryClient.invalidateQueries({ queryKey: [ID] })
-    })
-  }, [queryClient])
-
-  return query
-}
 
 // ctx is created per register() call; the request door is stable for the
 // plugin's lifetime, so one module-level binding is safe and keeps the query
 // functions out of the component tree.
 let ctxRest = () => Promise.reject(new Error('inbox: ctx not bound yet'))
 
-function ItemRow({ item, t, onOpen }) {
-  const tone = item.error ? 'destructive' : item.unread ? 'default' : 'muted'
+// ---------------------------------------------------------------------------
+// Dashboard: one card per job, carrying the actual message
+// ---------------------------------------------------------------------------
+//
+// The first version was a list of runs - one row per document, a two-line
+// preview, everything else behind a click. That is a log viewer, and it made the
+// reader do the work: to learn what a watcher currently says you had to open a
+// row, remember it, go back, open the next.
+//
+// This is the other shape. One card per JOB, showing its newest reported run in
+// full (up to a budget), with the counts and the recent-run dots on the header.
+// Reading the page is the same act as reading the reports - a click is only for
+// history or the untruncated text.
 
-  return jsxs('button', {
-    type: 'button',
-    onClick: () => onOpen(item),
+/** A card's body: monospace, preserved line breaks, clamped to a line budget. */
+function CardBody({ body, clamped, expanded, onToggle }) {
+  return jsxs('div', {
+    className: 'relative',
+    children: [
+      jsx('div', {
+        className: cn(
+          'whitespace-pre-wrap break-words text-[0.75rem] leading-[1.45] text-(--ui-text-secondary)',
+          // Only clamp when there is more to show; a short report must not get
+          // an expander it does not need.
+          clamped && !expanded ? 'line-clamp-[14]' : ''
+        ),
+        // Runs are plain text with markdown-ish furniture; preserving whitespace
+        // keeps the aligned columns of script reports readable.
+        children: body
+      }),
+      clamped
+        ? jsxs('button', {
+            type: 'button',
+            onClick: onToggle,
+            className: cn(
+              'mt-1 flex items-center gap-1 text-[0.6875rem] text-(--ui-text-quaternary)',
+              'transition-colors hover:text-foreground'
+            ),
+            children: [
+              jsx(Codicon, { name: expanded ? 'chevron-up' : 'chevron-down', size: '0.625rem' }),
+              jsx('span', { children: expanded ? 'Show less' : 'Show full report' })
+            ]
+          })
+        : null
+    ]
+  })
+}
+
+/** The little run-history dots: one per recent run, coloured by outcome. */
+function RunDots({ recent, limit = 8 }) {
+  const shown = recent.slice(0, limit)
+  if (!shown.length) return null
+
+  return jsx('span', {
+    className: 'flex items-center gap-1',
+    children: shown.map(run =>
+      jsx('span', {
+        key: run.id,
+        title: `${fmtTime(run.stamp)}${run.error ? ' · error' : run.silent ? ' · silent' : ''}`,
+        className: cn(
+          'h-1.5 w-1.5 rounded-full',
+          run.error
+            ? 'bg-destructive'
+            : run.silent
+              ? 'bg-(--ui-stroke-tertiary)'
+              : run.unread
+                ? 'bg-(--ui-accent)'
+                : 'bg-(--ui-text-quaternary)/45'
+        )
+      })
+    )
+  })
+}
+
+function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute }) {
+  const [expanded, setExpanded] = useState(false)
+
+  const badge = card.error
+    ? jsx(Badge, { variant: 'destructive', size: 'xs', children: t('error') })
+    : card.unread
+      ? jsx('span', {
+          className: 'flex items-center gap-1 text-[0.625rem] font-medium text-(--ui-accent)',
+          children: [
+            jsx('span', { className: 'h-1.5 w-1.5 rounded-full bg-(--ui-accent)' }),
+            jsx('span', { children: t('new') })
+          ]
+        })
+      : null
+
+  return jsxs('article', {
     className: cn(
-      'group flex w-full items-start gap-3 rounded-md px-3 py-2 text-left transition-colors',
-      'hover:bg-(--chrome-action-hover) focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring/40'
+      'group relative flex flex-col gap-2 rounded-lg border px-3 py-2.5 transition-colors',
+      'border-(--ui-stroke-secondary) bg-(--ui-bg-secondary)',
+      card.error ? 'ring-1 ring-destructive/25' : ''
     ),
     children: [
-      // Unread dot: the one thing that must scan at a glance.
-      jsx('span', {
-        className: cn(
-          'mt-1.5 size-1.5 shrink-0 rounded-full',
-          item.unread ? 'bg-(--ui-accent)' : 'bg-transparent'
-        )
-      }),
-      jsxs('span', {
-        className: 'flex min-w-0 flex-1 flex-col gap-0.5',
+      // ---- header ----------------------------------------------------------
+      jsxs('div', {
+        className: 'flex items-center gap-2',
         children: [
-          jsxs('span', {
-            className: 'flex items-baseline gap-2',
+          jsx('span', {
+            className: cn(
+              'truncate text-[0.8125rem]',
+              card.unread ? 'font-semibold text-foreground' : 'font-medium text-(--ui-text-secondary)'
+            ),
+            children: card.job_name
+          }),
+          badge,
+          card.orphan
+            ? jsx(Badge, { variant: 'outline', size: 'xs', children: t('orphan') })
+            : null,
+          card.profile !== 'default'
+            ? jsx(Badge, { variant: 'outline', size: 'xs', children: card.profile })
+            : null,
+          jsx('span', { className: 'flex-1' }),
+          jsx(RunDots, { recent: card.recent }),
+          jsx('span', {
+            className: 'shrink-0 text-[0.625rem] tabular-nums text-(--ui-text-quaternary)',
+            title: fmtTime(card.stamp),
+            children: relTime(card.stamp)
+          })
+        ]
+      }),
+
+      // ---- the message -----------------------------------------------------
+      card.body
+        ? jsx(CardBody, {
+            body: card.body,
+            clamped: card.chars > card.body.length || card.truncated,
+            expanded,
+            onToggle: () => setExpanded(v => !v)
+          })
+        : jsx('div', {
+            className: 'text-xs italic text-(--ui-text-quaternary)',
+            children: t('silent')
+          }),
+
+      // ---- footer ----------------------------------------------------------
+      jsxs('div', {
+        className: 'flex flex-wrap items-center gap-2 text-[0.625rem] text-(--ui-text-quaternary)',
+        children: [
+          card.schedule ? jsx('span', { children: card.schedule }) : null,
+          jsx('span', { children: `· ${card.is_script ? t('script') : t('agent')}` }),
+          jsx('span', {
+            children: `· ${card.runs === 1 ? '1 run' : `${card.runs} runs`}`
+          }),
+          card.unread_runs > 0
+            ? jsx('span', {
+                className: 'text-(--ui-accent)',
+                children: `· ${card.unread_runs} unread`
+              })
+            : null,
+          card.error_runs > 0
+            ? jsx('span', {
+                className: 'text-destructive',
+                children: `· ${card.error_runs} failed`
+              })
+            : null,
+          jsx('span', { className: 'flex-1' }),
+          // Actions stay out of the way until the card is hovered or focused, so
+          // the resting state is text rather than chrome.
+          jsxs('div', {
+            className: 'flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100',
             children: [
-              jsx('span', {
-                className: cn(
-                  'truncate text-[0.8125rem]',
-                  item.unread ? 'font-medium text-foreground' : 'text-(--ui-text-secondary)'
-                ),
-                children: item.job_name
-              }),
-              item.profile !== 'default'
-                ? jsx('span', {
-                    className: 'shrink-0 text-[0.62rem] text-(--ui-text-quaternary)',
-                    children: item.profile
+              card.unread
+                ? jsx('button', {
+                    type: 'button',
+                    onClick: () => onMarkJobRead(card),
+                    className: 'rounded px-1 py-0.5 transition-colors hover:bg-(--chrome-action-hover) hover:text-foreground',
+                    children: t('markRead')
                   })
                 : null,
-              jsx('span', { className: 'flex-1' }),
-              jsx('span', {
-                className: 'shrink-0 text-[0.62rem] tabular-nums text-(--ui-text-quaternary)',
-                title: fmtTime(item.stamp),
-                children: relTime(item.stamp)
+              jsx('button', {
+                type: 'button',
+                onClick: () => onOpenHistory(card),
+                className: 'rounded px-1 py-0.5 transition-colors hover:bg-(--chrome-action-hover) hover:text-foreground',
+                children: t('history')
+              }),
+              jsx('button', {
+                type: 'button',
+                onClick: () => onMute(card, !card.muted),
+                title: card.muted ? t('unmute') : t('mute'),
+                className: 'rounded px-1 py-0.5 transition-colors hover:bg-(--chrome-action-hover) hover:text-foreground',
+                children: jsx(Codicon, { name: card.muted ? 'bell-slash' : 'bell', size: '0.6875rem' })
               })
             ]
-          }),
-          jsx('span', {
-            className: 'line-clamp-2 text-xs leading-4 text-(--ui-text-tertiary)',
-            children: item.preview || t('silent')
-          }),
-          item.error
-            ? jsx('span', {
-                className: 'mt-0.5 flex items-center gap-1 text-[0.62rem] text-destructive',
-                children: [
-                  jsx(Codicon, { name: 'warning', size: '0.625rem' }),
-                  jsx('span', { children: item.status || t('error') })
-                ]
-              })
-            : null
+          })
         ]
       })
     ]
   })
 }
 
+/** One run, opened from a card's history. Keeps the old reader. */
 function Reader({ item, t, onBack, onRead, onMute }) {
   const detail = useQuery({
     queryKey: [ID, 'item', item.id],
@@ -246,9 +357,7 @@ function Reader({ item, t, onBack, onRead, onMute }) {
             className: 'truncate text-sm font-medium',
             children: item.job_name
           }),
-          item.error
-            ? jsx(Badge, { variant: 'destructive', children: t('error') })
-            : null,
+          item.error ? jsx(Badge, { variant: 'destructive', children: t('error') }) : null,
           item.profile !== 'default'
             ? jsx(Badge, { variant: 'outline', children: item.profile })
             : null,
@@ -277,9 +386,7 @@ function Reader({ item, t, onBack, onRead, onMute }) {
           item.schedule ? jsx('span', { children: ` · ${item.schedule}` }) : null,
           jsx('span', { children: ` · ${item.is_script ? t('script') : t('agent')}` }),
           jsx('span', { children: ` · ${t('chars', item.chars || body.length)}` }),
-          item.deliver
-            ? jsx('span', { children: ` · ${t('deliver')} ${item.deliver}` })
-            : null
+          item.deliver ? jsx('span', { children: ` · ${t('deliver')} ${item.deliver}` }) : null
         ]
       }),
       jsx(ScrollArea, {
@@ -313,13 +420,9 @@ function InboxPage({ ctx }) {
   const pollMs = Math.max(10, Number(settings.data?.poll_seconds) || 60) * 1000
 
   const [filter, setFilter] = useState('all')
-  // The plugin's own setting decides what the first open shows; the segmented
-  // control still overrides it for the session.
-  const [scope, setScope] = useState(null)
-  const effectiveScope = scope ?? (settings.data?.include_silent_by_default ? 'everything' : 'visible')
   const [search, setSearch] = useState('')
-  const [open, setOpen] = useState(null)
   const [deferred, setDeferred] = useState('')
+  const [open, setOpen] = useState(null)
 
   // Debounce the search box: a keystroke should not become a directory walk.
   useEffect(() => {
@@ -329,56 +432,77 @@ function InboxPage({ ctx }) {
 
   const params = useMemo(
     () => ({
-      limit: 300,
+      limit: 60,
       unread_only: filter === 'unread',
       errors_only: filter === 'errors',
-      include_silent: effectiveScope === 'everything',
-      include_muted: effectiveScope === 'everything',
+      include_silent: false,
+      include_muted: false,
       q: deferred
     }),
-    [filter, effectiveScope, deferred]
+    [filter, deferred]
   )
 
-  const query = useInbox(queryClient, params, pollMs)
+  const feed = useQuery({
+    queryKey: [ID, 'feed', qs(params)],
+    queryFn: () => ctxRest(`/feed${qs(params)}`),
+    refetchInterval: pollMs
+  })
 
-  const items = query.data?.items ?? []
-  const unread = query.data?.unread ?? 0
-  const jobCount = useMemo(() => new Set(items.map(i => `${i.profile}|${i.job_id}`)).size, [items])
+  useEffect(() => {
+    return host.onEvent(CHANGED_EVENT, () => {
+      void queryClient.invalidateQueries({ queryKey: [ID, 'feed'] })
+    })
+  }, [queryClient])
 
-  const markRead = useCallback(
-    async (item, read) => {
+  const cards = feed.data?.cards ?? []
+  const unread = feed.data?.unread ?? 0
+  const errors = feed.data?.errors ?? 0
+
+  const refresh = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: [ID] })
+  }, [queryClient])
+
+  const markJobRead = useCallback(
+    async card => {
       try {
-        await ctxRest(`/items/${encodeURIComponent(item.id)}/read`, {
-          method: 'POST',
-          body: { read }
-        })
+        // Marking a job read means marking its unread runs read; the card is a
+        // projection, so it cannot carry a single row's state.
+        await Promise.all(
+          card.recent
+            .filter(r => r.unread)
+            .map(r =>
+              ctxRest(`/items/${encodeURIComponent(r.id)}/read`, {
+                method: 'POST',
+                body: { read: true }
+              })
+            )
+        )
       } catch (err) {
         host.notify({ kind: 'error', message: String(err?.message || err) })
       }
-      queryClient.invalidateQueries({ queryKey: [ID] })
+      refresh()
     },
-    [queryClient]
+    [refresh]
   )
 
   const markMuted = useCallback(
-    async (item, muted) => {
+    async (card, muted) => {
       try {
-        await ctxRest(`/items/${encodeURIComponent(item.id)}/mute`, {
+        await ctxRest(`/items/${encodeURIComponent(card.latest_id)}/mute`, {
           method: 'POST',
           body: { muted }
         })
-        if (open?.id === item.id) setOpen(null)
       } catch (err) {
         host.notify({ kind: 'error', message: String(err?.message || err) })
       }
-      queryClient.invalidateQueries({ queryKey: [ID] })
+      refresh()
     },
-    [queryClient, open]
+    [refresh]
   )
 
   const markAll = useCallback(async () => {
     try {
-      const res = await ctxRest(`/mark-all-read`, {
+      const res = await ctxRest('/mark-all-read', {
         method: 'POST',
         body: { include_silent: false }
       })
@@ -386,15 +510,29 @@ function InboxPage({ ctx }) {
     } catch (err) {
       host.notify({ kind: 'error', message: String(err?.message || err) })
     }
-    queryClient.invalidateQueries({ queryKey: [ID] })
-  }, [queryClient, t])
+    refresh()
+  }, [refresh, t])
 
-  const openItem = useCallback(
-    (item) => {
-      setOpen(item)
-      if (item.unread) void markRead(item, true)
+  const openHistory = useCallback(
+    card => {
+      const run = card.recent[0]
+      if (!run) return
+      setOpen({
+        id: run.id,
+        job_name: card.job_name,
+        profile: card.profile,
+        stamp: run.stamp,
+        error: run.error,
+        muted: card.muted,
+        read: !run.unread,
+        schedule: card.schedule,
+        is_script: card.is_script,
+        deliver: card.deliver,
+        chars: card.chars,
+        preview: run.preview
+      })
     },
-    [markRead]
+    []
   )
 
   if (open) {
@@ -402,22 +540,37 @@ function InboxPage({ ctx }) {
       item: open,
       t,
       onBack: () => setOpen(null),
-      onRead: markRead,
-      onMute: markMuted
+      onRead: (item, read) => {
+        void ctxRest(`/items/${encodeURIComponent(item.id)}/read`, {
+          method: 'POST',
+          body: { read }
+        }).then(refresh, () => refresh())
+      },
+      onMute: (item, muted) => {
+        void ctxRest(`/items/${encodeURIComponent(item.id)}/mute`, {
+          method: 'POST',
+          body: { muted }
+        }).then(() => setOpen(null), refresh)
+      }
     })
   }
 
   return jsxs('div', {
     className: 'flex h-full min-h-0 flex-col',
     children: [
+      // ---- header ----------------------------------------------------------
       jsxs('div', {
-        className: 'flex shrink-0 flex-wrap items-center gap-2 px-3 py-2',
+        className: 'flex shrink-0 flex-wrap items-center gap-2 px-3 pb-1 pt-2',
         children: [
           jsx('span', { className: 'text-sm font-medium', children: t('title') }),
-          unread > 0
-            ? jsx(Badge, { variant: 'solid', size: 'xs', children: unread })
+          unread > 0 ? jsx(Badge, { variant: 'solid', size: 'xs', children: unread }) : null,
+          errors > 0
+            ? jsx(Badge, { variant: 'destructive', size: 'xs', children: errors })
             : null,
-          jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: t('subtitle', jobCount) }),
+          jsx('span', {
+            className: 'text-[0.6875rem] text-(--ui-text-quaternary)',
+            children: t('subtitle', cards.length)
+          }),
           jsx('span', { className: 'flex-1' }),
           unread > 0
             ? jsxs(Button, {
@@ -439,12 +592,6 @@ function InboxPage({ ctx }) {
             onChange: setFilter,
             sizing: 'content'
           }),
-          jsx(SegmentedControl, {
-            options: SCOPES.map(s => ({ id: s.id, label: t(s.id) })),
-            value: effectiveScope,
-            onChange: setScope,
-            sizing: 'content'
-          }),
           jsx('span', { className: 'min-w-0 flex-1' }),
           jsx(SearchField, {
             placeholder: t('search'),
@@ -454,29 +601,29 @@ function InboxPage({ ctx }) {
           })
         ]
       }),
-      jsx('div', { className: 'min-h-0 flex-1', children: renderList() })
+      jsx('div', { className: 'min-h-0 flex-1', children: renderFeed() })
     ]
   })
 
-  function renderList() {
-    if (query.isLoading && !query.data) {
+  function renderFeed() {
+    if (feed.isLoading && !feed.data) {
       return jsx('div', {
-        className: 'flex flex-col gap-1 px-3',
-        children: [0, 1, 2, 3, 4].map(i =>
-          jsx(Skeleton, { key: i, className: 'h-11 w-full rounded-md' })
+        className: 'flex flex-col gap-2 px-3',
+        children: [0, 1, 2].map(i =>
+          jsx(Skeleton, { key: i, className: 'h-28 w-full rounded-lg' })
         )
       })
     }
-    if (query.isError) {
+    if (feed.isError) {
       return jsx('div', {
         className: 'grid h-full place-items-center px-6',
         children: jsx(ErrorState, {
           title: t('failed'),
-          description: `${t('failedHint')}\n${String(query.error?.message || '')}`
+          description: `${t('failedHint')}\n${String(feed.error?.message || '')}`
         })
       })
     }
-    if (!items.length) {
+    if (!cards.length) {
       return jsx(EmptyState, {
         title: t('empty'),
         description: deferred || filter !== 'all' ? t('noMatch') : t('emptyHint')
@@ -485,8 +632,20 @@ function InboxPage({ ctx }) {
     return jsx(ScrollArea, {
       className: 'h-full',
       children: jsx('div', {
-        className: 'flex flex-col gap-0.5 px-1 pb-6',
-        children: items.map(item => jsx(ItemRow, { key: item.id, item, t, onOpen: openItem }))
+        // A single column: the cards carry real text now, and two columns of
+        // prose is harder to read than one. Density comes from the cards being
+        // short, not from being narrow.
+        className: 'flex flex-col gap-2 px-3 pb-8',
+        children: cards.map(card =>
+          jsx(JobCard, {
+            key: `${card.profile}|${card.job_id}`,
+            card,
+            t,
+            onOpenHistory: openHistory,
+            onMarkJobRead: markJobRead,
+            onMute: markMuted
+          })
+        )
       })
     })
   }

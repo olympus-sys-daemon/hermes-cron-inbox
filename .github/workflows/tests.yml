@@ -58,3 +58,14 @@ jobs:
         # missed report when the count stays flat), so they need asserted
         # behaviour rather than a syntax check.
         run: node tests/test_notifier.mjs
+      - name: Dashboard renders with real data
+        # Proves the cards render their body text: the whole redesign is that
+        # reading needs no click, and a shallow render cannot see that. Skips
+        # when the machine has no cron corpus to read.
+        run: |
+          if [ -z "$(find "${HERMES_HOME:-$HOME/.hermes}"/cron/output -name '*.md' 2>/dev/null | head -1)" ] \
+             && [ -z "$(find "${HERMES_HOME:-$HOME/.hermes}"/profiles/*/cron/output -name '*.md' 2>/dev/null | head -1)" ]; then
+            echo "no cron corpus on this runner - skipping the render test"
+            exit 0
+          fi
+          node tests/test_render.mjs
