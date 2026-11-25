@@ -33,6 +33,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 const ID = 'hermes-cron-inbox'
 const PATH = '/inbox'
+// Core's cron page. Not exported by the SDK and not gated by interface mode, so
+// a plain navigate is the supported way in.
+const CRON_PATH = '/cron'
 const CHANGED_EVENT = 'cron.changed'
 
 // The inbox is a view over files the scheduler writes in the background, so
@@ -79,6 +82,8 @@ const LOCALES = {
       'Restart the gateway (or the app) and this page will work. Approving an update is enough — ' +
       'nothing is broken on disk.',
     markAll: 'Mark all read',
+    scheduledJobs: 'Scheduled jobs',
+    openScheduled: 'Open the Scheduled jobs page',
     markedAll: n => (n === 1 ? '1 run marked read' : `${n} runs marked read`),
     markRead: 'Mark read',
     markUnread: 'Mark unread',
@@ -847,6 +852,19 @@ function InboxPage({ ctx }) {
             children: t('subtitle', cards.length)
           }),
           jsx('span', { className: 'flex-1' }),
+          // The Scheduled jobs page is a sidebar row only in ADVANCED mode
+          // (`tier: 'advanced'` in the sidebar's SIDEBAR_NAV), so in simple mode
+          // there is no way to reach it at all. The route itself is not gated -
+          // `cronOpen = currentView === 'cron'` - so navigating here works in
+          // every mode. This is the door simple mode is missing.
+          jsxs(Button, {
+            variant: 'ghost',
+            size: 'sm',
+            onClick: () => host.navigate(CRON_PATH),
+            title: t('openScheduled'),
+            className: 'gap-1',
+            children: [jsx(Codicon, { name: 'watch', size: '0.75rem' }), t('scheduledJobs')]
+          }),
           unread > 0
             ? jsxs(Button, {
                 variant: 'ghost',
