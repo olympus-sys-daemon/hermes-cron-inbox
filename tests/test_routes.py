@@ -379,6 +379,65 @@ def test_feed_leads_with_what_needs_attention():
     assert rank == sorted(rank), f"cards are not ordered by attention: {rank}"
 
 
+def test_reading_one_item_does_not_pollute_the_parse_cache():
+    """The parse cache is shared and long-lived; decorating must not mutate it.
+
+    Tested at the mechanism, not through HTTP: `_scan` builds fresh row dicts, so
+    in-place pollution of the cached dict never reaches a list response and an
+    HTTP-level assertion cannot see it. What matters is that the dict handed back
+    by `_find_item` is not the cached object - otherwise every read permanently
+    grows the cache entry with request-scoped keys.
+    """
+    items = client.get("/api/plugins/hermes-cron-inbox/items").json()["items"]
+    assert items, "no items in the fixture"
+    item_id = items[0]["id"]
+
+    profile, job_id, stamp = item_id.split("|", 2)
+    doc = api._document_path(profile, job_id, stamp)
+    assert doc is not None, "fixture document missing"
+
+    cached_before = api._read_parsed(doc)
+    assert cached_before is not None
+    keys_before = set(cached_before.keys())
+
+    detail, _ = api._find_item(item_id)
+    assert detail is not cached_before, (
+        "_find_item returned the CACHED dict; decorating it in place pollutes a "
+        "process-wide cache with request-scoped keys"
+    )
+
+    cached_after = api._read_parsed(doc)
+    added = set(cached_after.keys()) - keys_before
+    assert not added, f"_find_item added keys to the parse cache: {sorted(added)}"
+
+    client.get(f"/api/plugins/hermes-cron-inbox/items/{item_id}")
+    added = set(api._read_parsed(doc).keys()) - keys_before
+    assert not added, f"get_item added keys to the parse cache: {sorted(added)}"
+
+
+def test_marking_a_job_read_covers_runs_beyond_the_first_six():
+    """The card only carries six runs; a job-level read must not stop there."""
+    path = "/api/plugins/hermes-cron-inbox"
+
+    # Seed read state off, then mark the whole job read.
+    items = client.get(f"{path}/items?include_silent=false").json()["items"]
+    job_ids = {(i["profile"], i["job_id"]) for i in items}
+    assert job_ids, "no jobs in the fixture"
+    profile, job_id = sorted(job_ids)[0]
+
+    resp = client.post(f"{path}/jobs/{profile}/{job_id}/read", json={"read": True})
+    assert resp.status_code == 200
+
+    after = client.get(f"{path}/items?include_silent=false").json()["items"]
+    still_unread = [
+        i for i in after
+        if i["profile"] == profile and i["job_id"] == job_id and i["unread"]
+    ]
+    assert not still_unread, (
+        f"{len(still_unread)} run(s) of {job_id} still unread after a job-level read"
+    )
+
+
 def test_unknown_item_404s():
     assert client.get("/api/plugins/hermes-cron-inbox/items/default|deadbeefdead|2026-01-01_00-00-00").status_code == 404
 

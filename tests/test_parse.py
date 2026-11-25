@@ -225,6 +225,47 @@ def test_live_silent_scripts_are_detected():
 
 # ---- script-mode runner ---------------------------------------------------- #
 
+# --------------------------------------------------------------------------- #
+# Regression: card-body cleaning must not eat a report's first line
+# --------------------------------------------------------------------------- #
+
+
+def test_clean_body_strips_a_banner_but_keeps_prose():
+    """A banner is `label · timestamp`. Prose that merely mentions a date is not.
+
+    The first version tested "short line containing a date" and silently deleted
+    real opening lines such as "Backup finished 2026-11-25".
+    """
+    _clean_body = api._clean_body
+
+    # Stripped: the shape a script report actually uses.
+    assert _clean_body("PortWatch VI · 2026-11-25 16:03 UTC\nLeader : x", "PortWatch") \
+        == "Leader : x"
+    assert _clean_body("──────────\nDigest — 2026-11-25 09:00\n──────────\nbody", "Digest") \
+        == "body"
+
+    # Kept: every one of these is content, not furniture.
+    for body in (
+        "Backup finished 2026-11-25\nAll 42 files copied",
+        "Disk at 91% as of 2026-11-25\nmore",
+        "Ran at 09:30\nNothing changed",
+        "Error 2026-11-25: quota exceeded\nretry later",
+        "2026-11-25 report\ncontents",
+    ):
+        out = _clean_body(body, "Some Job")
+        assert out.startswith(body.splitlines()[0]), (
+            f"_clean_body ate a real first line: {body.splitlines()[0]!r} -> {out[:60]!r}"
+        )
+
+
+def test_clean_body_strips_a_leading_repeat_of_the_job_name():
+    _clean_body = api._clean_body
+    assert _clean_body("Nightly curator\nsome body", "Nightly curator") == "some body"
+    # But a longer line that merely starts with the name is content.
+    kept = _clean_body("Nightly curator finished in 4s\nok", "Nightly curator")
+    assert kept.startswith("Nightly curator finished")
+
+
 if __name__ == "__main__":
     tests = [(name, fn) for name, fn in sorted(globals().items()) if name.startswith("test_")]
     failures = skipped = 0

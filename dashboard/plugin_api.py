@@ -50,7 +50,11 @@ _SILENT_PREFIXES = ("silent", "no_change")
 # A run banner such as "PortWatch VI · 2026-11-25 16:03 UTC" - a date inside a
 # short line that is not a list item. Card headers already carry the job name and
 # time, so this is furniture there.
-_BANNER_DATE = re.compile(r"\d{4}-\d{2}-\d{2}|\b\d{1,2}:\d{2}\b")
+# A banner reads `label · timestamp`. The separator is the discriminator: prose
+# rarely contains one, so requiring it cannot swallow a real first line.
+_BANNER_SEPARATORS = ("·", "—", "–", "|", "•")
+# The timestamp sits at the END of a banner ("Name · 2026-11-25 16:03 UTC").
+_BANNER_TAIL_DATE = re.compile(r"(\d{4}-\d{2}-\d{2}|\b\d{1,2}:\d{2}\b)[^:;]*$")
 _ERROR_PREFIXES = ("script failed", "blocked", "error", "failed")
 _SILENCE_TOKENS = ("[silent]", "silent", "no_reply", "no reply")
 
@@ -408,14 +412,18 @@ def _clean_body(body: str, job_name: str = "") -> str:
             continue
         is_rule = set(stripped) <= set("─━═-=_*#~·. ") and len(stripped) >= 3
         is_dup_name = bool(job_name) and stripped.strip("#  ").casefold() == job_name.casefold()
-        # A banner line repeats what the card header already shows: the job name
-        # and the run time. Script reports commonly sandwich one between two
-        # rules, so treating it as furniture is what lets a single pass clear the
-        # whole block - the rule above it, the banner, and the rule below.
+        # A banner line repeats what the card header already shows. The old test
+        # - "short line containing a date" - swallowed real opening lines such as
+        # "Backup finished 2026-11-25", silently deleting the report's first line.
+        # A banner's actual shape is `label · timestamp`: a separator character
+        # plus a date. Requiring the separator is what distinguishes decoration
+        # from content, and prose almost never uses one.
         is_banner = (
-            len(stripped) <= 80
+            len(stripped) <= 60
             and not stripped.startswith(("•", "-", "*", ">", "|"))
-            and _BANNER_DATE.search(stripped) is not None
+            and len(stripped.split()) <= 8
+            and any(sep in stripped for sep in _BANNER_SEPARATORS)
+            and _BANNER_TAIL_DATE.search(stripped) is not None
         )
         if is_rule or is_dup_name or is_banner:
             i += 1
@@ -667,15 +675,19 @@ async def feed(
             "status": shown["status"],
             "silent": shown["silent"],
             "error": shown["error"],
-            # Only REPORTED runs count: a silent run is never shown, so letting
-            # it set "unread" made a card claim "New" while its own footer read
-            # "0 unread".
-            "unread": any(r["unread"] for r in live),
+            # Both counters must use the SAME population or the card contradicts
+            # itself: `unread` counted reported+muted runs while `unread_runs`
+            # counted reported runs including muted ones, so a muted-but-unread
+            # run could make the flag true and the footer say 1 when the true
+            # visible count was 0. Reported = not silent; that is what the page
+            # shows.
+            "unread": any(r["unread"] for r in runs if not r["silent"]),
             "muted": latest["muted"],
             "latest_id": shown["id"],
             # Counters the card header shows without another call.
             "runs": len(runs),
             "unread_runs": sum(1 for r in runs if r["unread"] and not r["silent"]),
+            # Silence/error ordering uses the same population as `unread`.
             "error_runs": sum(1 for r in runs[:50] if r["error"]),
             "body": body[:body_limit],
             "truncated": len(body) > body_limit,
@@ -762,7 +774,12 @@ def _find_item(item_id: str) -> tuple[dict[str, Any], Path]:
             raise HTTPException(status_code=500, detail="run document could not be read")
         jobs = _load_jobs(cron_dir)
         job = jobs.get(job_id) or {}
-        parsed.update({
+        # COPY before decorating. `parsed` comes from the shared parse cache and
+        # is the SAME dict on every read, so mutating it here leaked these
+        # request-scoped keys (path, read, read_at) into every later `_scan`: the
+        # cache grew a per-request tail that nothing prunes.
+        result = dict(parsed)
+        result.update({
             "id": item_id,
             "profile": profile,
             "job_id": job_id,
@@ -774,7 +791,7 @@ def _find_item(item_id: str) -> tuple[dict[str, Any], Path]:
             "job_enabled": job.get("enabled"),
             "chars": len(parsed["body"]),
         })
-        return parsed, path
+        return result, path
     raise HTTPException(status_code=404, detail="unknown profile")
 
 
@@ -782,6 +799,9 @@ def _find_item(item_id: str) -> tuple[dict[str, Any], Path]:
 async def get_item(item_id: str) -> dict[str, Any]:
     parsed, path = _find_item(item_id)
     read_at, muted = _STATE.snapshot().get(item_id, (None, False))
+    # `_find_item` already returned a copy, so decorating here is safe. `path` is
+    # part of this endpoint's documented contract ("full body and source path"):
+    # a client that wants to reveal the file needs it.
     parsed.update({"read": read_at is not None, "read_at": read_at, "muted": muted})
     parsed["path"] = str(path)
     return parsed
@@ -800,6 +820,29 @@ async def mark_read(item_id: str, body: ReadBody) -> dict[str, Any]:
     _find_item(item_id)  # 404s a stale id instead of storing state for a ghost
     _STATE.set_read(item_id, body.read)
     return {"ok": True, "id": item_id, "read": body.read}
+
+
+@router.post("/jobs/{profile}/{job_id}/read")
+async def mark_job_read(profile: str, job_id: str, body: ReadBody) -> dict[str, Any]:
+    """Mark (or unmark) EVERY unread run of one job as read.
+
+    The desktop half cannot do this itself: its card carries only `recent` (the
+    newest six runs), so iterating that left older unread runs untouched while
+    reporting success. A job-level action needs a job-level query.
+    """
+    if not profile or not job_id:
+        raise HTTPException(status_code=400, detail="profile and job_id are required")
+
+    marked = 0
+    for item in _decorate(_scan(include_silent=False)):
+        if item["profile"] != profile or item["job_id"] != job_id:
+            continue
+        if body.read and not item["unread"]:
+            continue
+        _STATE.set_read(item["id"], body.read)
+        marked += 1
+
+    return {"read": body.read, "runs": marked}
 
 
 @router.post("/jobs/{profile}/{job_id}/mute")

@@ -72,7 +72,7 @@ const LOCALES = {
     reported: 'Reported',
     everything: 'Everything',
     empty: 'Nothing to read',
-    emptyHint: 'Watchers that found nothing stay hidden. Switch to Everything to see every run.',
+    emptyHint: 'Watchers that found nothing stay hidden — there is nothing to read there.',
     noMatch: 'No runs match this filter.',
     failed: 'Inbox unavailable',
     failedHint: 'The inbox backend did not answer. Is the plugin enabled in config.yaml?',
@@ -101,7 +101,7 @@ const LOCALES = {
     schedule: 'Schedule',
     deliver: 'Delivers to',
     job: 'Job',
-    mutedNote: 'Muted jobs are hidden until you unmute them or switch to Everything.',
+    mutedNote: 'Muted jobs are hidden until you unmute them — find them under the Muted filter.',
     openAgentRun: 'This run belongs to an agent job — its transcript is on the Cron page.'
   }
 }
@@ -168,7 +168,6 @@ let ctxRest = () => Promise.reject(new Error('inbox: ctx not bound yet'))
 // Reading the page is the same act as reading the reports - a click is only for
 // history or the untruncated text.
 
-/** A card's body: monospace, preserved line breaks, clamped to a line budget. */
 /**
  * A card's report text, and the way into the full view.
  *
@@ -183,8 +182,6 @@ let ctxRest = () => Promise.reject(new Error('inbox: ctx not bound yet'))
  * copying, not navigating.
  */
 function CardBody({ body, clamped, expanded, onToggle, onOpen, t }) {
-  const [hovered, setHovered] = useState(false)
-
   const handleClick = useCallback(() => {
     // Read the selection at click time: a drag-select that ends inside the block
     // fires click too, and that must not navigate.
@@ -209,8 +206,6 @@ function CardBody({ body, clamped, expanded, onToggle, onOpen, t }) {
             onOpen()
           }
         },
-        onMouseEnter: () => setHovered(true),
-        onMouseLeave: () => setHovered(false),
         title: t('openFull'),
         className: cn(
           // `select-text` is explicit: some ancestors in a clickable card set
@@ -655,17 +650,11 @@ function InboxPage({ ctx }) {
   const markJobRead = useCallback(
     async card => {
       try {
-        // Marking a job read means marking its unread runs read; the card is a
-        // projection, so it cannot carry a single row's state.
-        await Promise.all(
-          card.recent
-            .filter(r => r.unread)
-            .map(r =>
-              ctxRest(`/items/${encodeURIComponent(r.id)}/read`, {
-                method: 'POST',
-                body: { read: true }
-              })
-            )
+        // Job-level, not per-row: the card only carries `recent` (six runs), so
+        // iterating those left older unread runs unread while reporting success.
+        await ctxRest(
+          `/jobs/${encodeURIComponent(card.profile)}/${encodeURIComponent(card.job_id)}/read`,
+          { method: 'POST', body: { read: true } }
         )
       } catch (err) {
         host.notify({ kind: 'error', message: String(err?.message || err) })
