@@ -546,19 +546,31 @@ function UnreadChip() {
 }
 
 // ---------------------------------------------------------------------------
-// OS notifications
+// New-report notifications
 // ---------------------------------------------------------------------------
 //
-// Fires a native notification when a report the user has not read appears.
-// `ctx.os.notify` reaches Electron's Notification in the desktop app and the
-// browser Notification API in the Webapp (the host picks the half by
-// capabilities). It is gated by Settings -> Notifications -> "Plugin
-// notifications" (on by default) and the host already suppresses it while you
-// are looking at Hermes, so this deliberately does not guess focus itself.
+// Runs from `register()`, NOT from a rendered component. That distinction is the
+// whole design and it was learned the hard way:
 //
-// The Webapp half needs a SECURE CONTEXT: https or localhost. On a plain-http
-// LAN address the permission reads 'insecure' and nothing shows - which is part
-// of why hermes.quietforge.vip exists.
+//   A React mount point is a lie about liveness. This plugin's first notifier
+//   lived inside the statusbar contribution, which is the only surface present
+//   on every VIEW - but simple mode rests the statusbar hidden
+//   (interface-mode.ts: statusbarVisible = freeTierSignInOpen ||
+//   onboardingOpen), so in simple mode the component never mounted and no
+//   notification ever fired. Worse, it failed silently: the Inbox page itself
+//   still worked, so the plugin looked healthy.
+//
+// `register()` runs whenever the plugin is enabled, regardless of what is on
+// screen. The watcher therefore uses only context primitives - ctx.rest,
+// ctx.os.notify, ctx.onEvent, ctx.setInterval - all of which are torn down with
+// the plugin. No component, no reliance on any visible chrome.
+//
+// `ctx.os.notify` is Electron's Notification in the desktop app and the browser
+// Notification API in the Webapp (lib/browser-notifications.ts is its other
+// half). Two host rules apply and are not the plugin's to change:
+//   - it is suppressed while the window is focused (isBackgrounded()), so the
+//     in-app toast via host.notify covers the foreground case;
+//   - the Webapp half needs a secure context (https or localhost).
 //
 // Design note: track the SET of unread item ids, not the count. A count can stay
 // flat while one report arrives and another is read, so a count diff would miss
@@ -571,7 +583,7 @@ const NOTIFY_STORE_KEY = 'notified_unread_ids'
 function loadNotifiedIds() {
   try {
     const raw = host.storage.get(NOTIFY_STORE_KEY, [])
-    return Array.isArray(raw) ? raw.filter(x => typeof x === 'string') : []
+    return Array.isArray(raw) ? raw.filter(id => typeof id === 'string') : []
   } catch {
     return []
   }
@@ -583,7 +595,7 @@ function saveNotifiedIds(ids) {
     // grow without limit.
     host.storage.set(NOTIFY_STORE_KEY, ids.slice(0, 500))
   } catch {
-    /* storage is best-effort; never break the chip over it */
+    /* storage is best-effort; never break the watcher over it */
   }
 }
 
@@ -601,76 +613,71 @@ function summarise(items) {
   return `${name} and ${items.length - 1} more`
 }
 
-function CronNotifier() {
-  const queryClient = useQueryClient()
-  // Seeded from the FIRST successful poll, not from empty: whatever is already
-  // unread when the app opens is not news, and announcing a backlog of 50+ on
-  // every launch is the fastest way to get notifications switched off.
-  const primed = useRef(false)
-  const seen = useRef(new Set())
+/**
+ * Start the headless watcher. Returns nothing; every timer, listener and
+ * notification is registered against `ctx`, so unloading or disabling the
+ * plugin stops all of it.
+ */
+function startNotifier(ctx) {
+  // Seeded from the FIRST successful poll rather than from empty: whatever is
+  // already unread when the app opens is not news, and announcing a backlog of
+  // 50+ on every launch is the fastest way to get notifications switched off.
+  let primed = false
+  const seen = new Set()
 
-  const query = useQuery({
-    queryKey: [ID, 'notify-scan'],
-    queryFn: () => ctxRest('/items?unread_only=true&limit=200'),
-    refetchInterval: DEFAULT_POLL_MS
-  })
+  const tick = async () => {
+    let items
+    try {
+      const res = await ctx.rest('/items?unread_only=true&limit=200')
+      items = res?.items
+    } catch {
+      return // transient: a gateway restart must not kill the watcher
+    }
 
-  useEffect(() => {
-    return host.onEvent(CHANGED_EVENT, () => {
-      void queryClient.invalidateQueries({ queryKey: [ID, 'notify-scan'] })
-    })
-  }, [queryClient])
-
-  useEffect(() => {
-    const items = query.data?.items
     if (!Array.isArray(items)) return
 
     // The chip and the list both hide silent and muted runs; the notifier must
     // agree or it would announce things the page refuses to show.
     const unread = items.filter(item => !item.silent && !item.muted)
-    const ids = unread.map(item => item.id)
 
-    if (!primed.current) {
+    if (!primed) {
+      for (const item of unread) seen.add(item.id)
       const stored = loadNotifiedIds()
-      seen.current = new Set(stored.length ? stored : ids)
-      primed.current = true
-      if (!stored.length) saveNotifiedIds(ids)
+      // Carry the persisted set forward so a restart does not replay.
+      for (const id of stored) seen.add(id)
+      saveNotifiedIds([...seen])
+      primed = true
       return
     }
 
-    const known = seen.current
-    const fresh = unread.filter(item => !known.has(item.id))
+    const fresh = unread.filter(item => !seen.has(item.id))
 
     if (!fresh.length) {
-      // Reading items removes them from the unread list; drop them from `known`
-      // too so the set tracks reality instead of growing forever.
-      const live = new Set(ids)
+      // Reading items removes them from the unread list; drop them from the set
+      // too so it tracks reality instead of growing forever.
+      const live = new Set(unread.map(item => item.id))
       let shrunk = false
-      for (const id of [...known]) {
+      for (const id of [...seen]) {
         if (!live.has(id)) {
-          known.delete(id)
+          seen.delete(id)
           shrunk = true
         }
       }
-      if (shrunk) saveNotifiedIds([...known])
+      if (shrunk) saveNotifiedIds([...seen])
       return
     }
 
-    for (const item of fresh) known.add(item.id)
-    saveNotifiedIds([...known])
+    for (const item of fresh) seen.add(item.id)
+    saveNotifiedIds([...seen])
 
     const title = fresh.length === 1 ? 'New cron report' : `${fresh.length} new cron reports`
     const body = summarise(fresh)
 
-    // Two doors, because the OS door is gated on being away:
-    //   host.os.notify -> Electron/browser notification, but the host drops it
-    //     while the window is focused (it would be redundant next to the app).
-    //   host.notify    -> the in-app toast, which has no focus gate.
-    // Calling both is what core's own docstring recommends, and it means a
-    // report is surfaced whether or not you happen to be looking. It is not
-    // double-notification: whichever door is shut is the one that does not
-    // need to fire.
-    host.os.notify({ title, body, activate: { path: PATH } })
+    // Two doors. The OS door is gated on being away; the toast has no focus
+    // gate. Calling both is core's own recommended split, and it is not
+    // double-notification - whichever door is shut is the one that would have
+    // been noise.
+    ctx.os.notify({ title, body, activate: { path: PATH } })
 
     host.notify({
       kind: fresh.some(item => item.error) ? 'warning' : 'info',
@@ -678,21 +685,27 @@ function CronNotifier() {
       message: body,
       action: { label: 'Open Inbox', run: () => host.navigate(PATH) }
     })
-  }, [query.data])
+  }
 
-  return null
+  // Backstop poll. `cron.changed` drives the immediate tick; this only covers a
+  // missed event.
+  ctx.setInterval(() => void tick(), DEFAULT_POLL_MS)
+  ctx.onEvent(CHANGED_EVENT, () => void tick())
+
+  // First tick is deferred so `register()` stays cheap and a slow backend never
+  // delays the plugin's own registration.
+  ctx.setTimeout(() => void tick(), 1500)
 }
 
 /**
- * The statusbar slot is the one surface mounted on every view, so the watcher
- * lives here. `UnreadChip` returns null at zero, which is why the notifier is a
- * sibling rather than a child - a null return would otherwise unmount the
- * watcher the moment the count hit zero.
+ * The statusbar contribution. Purely a readout - the notifier deliberately does
+ * NOT live here (see startNotifier): simple mode rests the statusbar hidden, so
+ * anything mounted inside it stops running and fails silently.
  */
 function StatusbarSlot() {
-  return jsxs('span', {
+  return jsx('span', {
     className: 'inline-flex h-full items-center',
-    children: [jsx(CronNotifier, {}), jsx(UnreadChip, {})]
+    children: jsx(UnreadChip, {})
   })
 }
 
@@ -701,6 +714,9 @@ export default {
   name: 'hermes-cron-inbox',
   register(ctx) {
     ctxRest = (path, opts) => ctx.rest(path, opts)
+
+    // Headless: starts here, not in a component, so it runs in every UI mode.
+    startNotifier(ctx)
 
     ctx.register({
       id: 'page',

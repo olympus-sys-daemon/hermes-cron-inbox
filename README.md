@@ -37,6 +37,22 @@ Behaviour worth knowing:
 - **Silent and muted runs never announce** — that would defeat the point of the filter.
 - **One notification per batch**, not per item: "3 new cron reports / <job> and 2 more".
 
+### It runs in every UI mode
+
+The watcher starts from the plugin's `register()` — **not** from a rendered component. That is not a
+style choice. This plugin's first notifier lived inside the statusbar contribution, which is the only
+surface mounted on every *view*; but **simple mode rests the statusbar hidden**
+(`interface-mode.ts`: `statusbarVisible = freeTierSignInOpen || onboardingOpen`), so in simple mode the
+component never mounted, no notification ever fired, and nothing reported an error — the Inbox page
+itself still worked, so the plugin looked healthy.
+
+`register()` runs whenever the plugin is enabled, whatever is on screen. The watcher uses only
+`ctx.rest` / `ctx.os.notify` / `ctx.onEvent` / `ctx.setInterval`, all torn down with the plugin. No
+component, no dependence on any visible chrome — so simple mode, advanced mode, a hidden statusbar and
+a collapsed window all behave the same.
+
+The statusbar chip is now a pure readout and contributes nothing to liveness.
+
 ### It also fires while you are looking
 
 `ctx.os.notify` is gated on being away from Hermes — the host drops it while the window is focused,
