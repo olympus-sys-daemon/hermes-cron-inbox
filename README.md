@@ -14,10 +14,37 @@ configuration, and no second copy of your data to drift.
 | Sidebar row | **Cron Inbox** — appears after the desktop half is switched on (see Install) |
 | Page `/inbox` | chronological feed of runs across every profile |
 | Status bar chip | unread count, turns destructive on unread failures |
-| ⌘K command | "Open Inbox" |
+| ⌘K command | "Open Cron Inbox" |
+| OS notification | one per batch of newly-arrived reports |
 
 Plus read/unread state, per-run mute, search, and three filters (All / Unread / Errors) with a
 Reported / Everything scope switch.
+
+### OS notifications
+
+When a report arrives that you have not read, the plugin raises a native notification — the OS
+notification centre in the desktop app, the browser's Notification API in the Webapp. Clicking it
+opens the Inbox.
+
+Behaviour worth knowing:
+
+- **The existing backlog never announces.** The first poll seeds the seen-set, so opening the app
+  with 50 unread reports does not fire 50 notifications. Only reports that *arrive* while it is
+  running are announced.
+- **It tracks item ids, not a count.** A count can stay flat while one report arrives and another
+  is read; diffing counts would miss the new one. Ids are `profile|job|stamp`, so the seen-set is
+  stable across restarts (persisted in plugin storage, capped at 500).
+- **Silent and muted runs never announce** — that would defeat the point of the filter.
+- **One notification per batch**, not per item: "3 new cron reports / <job> and 2 more".
+- **Only fires while you are away from Hermes.** The host suppresses it when the window is focused;
+  the in-app toast covers that case, and the chip always shows the count.
+
+Two things must both be true for it to work:
+
+1. **Settings → Notifications → "Plugin notifications"** must be on. It is on by default.
+2. **The Webapp needs a secure context** — `https://` or `localhost`. On a plain `http://` LAN
+   address browsers refuse to raise notifications (`isSecureContext` is false), so nothing shows
+   and there is no error to see. The desktop app has no such constraint.
 
 ## Why it exists
 

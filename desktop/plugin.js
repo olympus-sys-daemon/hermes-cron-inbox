@@ -29,7 +29,7 @@ import {
   useQueryClient
 } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 const ID = 'hermes-cron-inbox'
 const PATH = '/inbox'
@@ -522,6 +522,8 @@ function UnreadChip() {
     })
   }, [queryClient])
 
+
+
   if (!count && !errors) return null
 
   return jsx('button', {
@@ -540,6 +542,143 @@ function UnreadChip() {
       }),
       jsx('span', { children: count })
     ]
+  })
+}
+
+// ---------------------------------------------------------------------------
+// OS notifications
+// ---------------------------------------------------------------------------
+//
+// Fires a native notification when a report the user has not read appears.
+// `ctx.os.notify` reaches Electron's Notification in the desktop app and the
+// browser Notification API in the Webapp (the host picks the half by
+// capabilities). It is gated by Settings -> Notifications -> "Plugin
+// notifications" (on by default) and the host already suppresses it while you
+// are looking at Hermes, so this deliberately does not guess focus itself.
+//
+// The Webapp half needs a SECURE CONTEXT: https or localhost. On a plain-http
+// LAN address the permission reads 'insecure' and nothing shows - which is part
+// of why hermes.quietforge.vip exists.
+//
+// Design note: track the SET of unread item ids, not the count. A count can stay
+// flat while one report arrives and another is read, so a count diff would miss
+// the new one (or re-announce an old one). Ids are content-addressed
+// (profile|job_id|stamp), so the comparison is stable across restarts.
+
+const NOTIFY_BODY_MAX = 120
+const NOTIFY_STORE_KEY = 'notified_unread_ids'
+
+function loadNotifiedIds() {
+  try {
+    const raw = host.storage.get(NOTIFY_STORE_KEY, [])
+    return Array.isArray(raw) ? raw.filter(x => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function saveNotifiedIds(ids) {
+  try {
+    // Bounded: only the newest matter for de-duplication and this must never
+    // grow without limit.
+    host.storage.set(NOTIFY_STORE_KEY, ids.slice(0, 500))
+  } catch {
+    /* storage is best-effort; never break the chip over it */
+  }
+}
+
+function summarise(items) {
+  const first = items[0]
+  if (!first) return ''
+
+  const name = first.job_name || first.title || 'A job'
+
+  if (items.length === 1) {
+    const preview = String(first.preview || '').replace(/\s+/g, ' ').trim()
+    return preview ? `${name}: ${preview}`.slice(0, NOTIFY_BODY_MAX) : name
+  }
+
+  return `${name} and ${items.length - 1} more`
+}
+
+function CronNotifier() {
+  const queryClient = useQueryClient()
+  // Seeded from the FIRST successful poll, not from empty: whatever is already
+  // unread when the app opens is not news, and announcing a backlog of 50+ on
+  // every launch is the fastest way to get notifications switched off.
+  const primed = useRef(false)
+  const seen = useRef(new Set())
+
+  const query = useQuery({
+    queryKey: [ID, 'notify-scan'],
+    queryFn: () => ctxRest('/items?unread_only=true&limit=200'),
+    refetchInterval: DEFAULT_POLL_MS
+  })
+
+  useEffect(() => {
+    return host.onEvent(CHANGED_EVENT, () => {
+      void queryClient.invalidateQueries({ queryKey: [ID, 'notify-scan'] })
+    })
+  }, [queryClient])
+
+  useEffect(() => {
+    const items = query.data?.items
+    if (!Array.isArray(items)) return
+
+    // The chip and the list both hide silent and muted runs; the notifier must
+    // agree or it would announce things the page refuses to show.
+    const unread = items.filter(item => !item.silent && !item.muted)
+    const ids = unread.map(item => item.id)
+
+    if (!primed.current) {
+      const stored = loadNotifiedIds()
+      seen.current = new Set(stored.length ? stored : ids)
+      primed.current = true
+      if (!stored.length) saveNotifiedIds(ids)
+      return
+    }
+
+    const known = seen.current
+    const fresh = unread.filter(item => !known.has(item.id))
+
+    if (!fresh.length) {
+      // Reading items removes them from the unread list; drop them from `known`
+      // too so the set tracks reality instead of growing forever.
+      const live = new Set(ids)
+      let shrunk = false
+      for (const id of [...known]) {
+        if (!live.has(id)) {
+          known.delete(id)
+          shrunk = true
+        }
+      }
+      if (shrunk) saveNotifiedIds([...known])
+      return
+    }
+
+    for (const item of fresh) known.add(item.id)
+    saveNotifiedIds([...known])
+
+    host.os.notify({
+      title: fresh.length === 1 ? 'New cron report' : `${fresh.length} new cron reports`,
+      body: summarise(fresh),
+      activate: { path: PATH }
+    })
+  }, [query.data])
+
+  return null
+}
+
+/**
+ * The statusbar slot is the one surface mounted on every view, so the watcher
+ * lives here. `UnreadChip` returns null at zero, which is why the notifier is a
+ * sibling rather than a child - a null return would otherwise unmount the
+ * watcher the moment the count hit zero.
+ */
+function StatusbarSlot() {
+  return jsxs('span', {
+    className: 'inline-flex h-full items-center',
+    children: [jsx(CronNotifier, {}), jsx(UnreadChip, {})]
   })
 }
 
@@ -566,7 +705,7 @@ export default {
       id: 'chip',
       area: STATUSBAR_AREAS.right,
       order: 75,
-      render: () => jsx(UnreadChip, {})
+      render: () => jsx(StatusbarSlot, {})
     })
 
     ctx.register({

@@ -53,3 +53,8 @@ jobs:
         # The app loads plugin.js uncompiled, so a syntax error is a load
         # failure. node --check is the cheapest gate that catches it.
         run: node --check desktop/plugin.js
+      - name: Notifier behaviour
+        # The notifier's failure modes are silent (backlog spam on launch, a
+        # missed report when the count stays flat), so they need asserted
+        # behaviour rather than a syntax check.
+        run: node tests/test_notifier.mjs
