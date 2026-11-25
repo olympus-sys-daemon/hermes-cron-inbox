@@ -3,21 +3,12 @@ import assert from 'node:assert'
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
-import { execFileSync } from 'node:child_process'
+import { APP_ROOT, requireLocalHermes } from './harness.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SRC = join(dirname(HERE), 'desktop', 'plugin.js')
-const PY = process.env.PYTHON_BIN ?? 'python3'
 
-const feed = JSON.parse(
-  execFileSync(PY, ['-I', join(HERE, 'probe_feed.py')], {
-    stdio: ['ignore', 'pipe', 'inherit']
-  }).toString()
-)
-if (!feed.cards.length) {
-  console.log('skip: no cards')
-  process.exit(0)
-}
+const { feed, react, reactDom } = requireLocalHermes({ testsDir: HERE })
 
 const src = readFileSync(SRC, 'utf8')
 const sdkNames = src
@@ -42,7 +33,7 @@ const overrides = {
 }
 const stub = sdkNames.map(n => overrides[n] ?? `export const ${n} = () => null`).join('\n')
 
-const APP = '/Users/hermesmac/.hermes/hermes-agent/apps/desktop'
+const APP = APP_ROOT
 const dir = mkdtempSync(join(APP, '.inbox-hier-'))
 writeFileSync(join(dir, 'sdk.mjs'), stub)
 let out = src.replace(/'@hermes\/plugin-sdk'/g, `'${pathToFileURL(join(dir, 'sdk.mjs')).href}'`)
@@ -52,10 +43,8 @@ writeFileSync(target, out)
 
 globalThis.__NEXT_DATA = { feed, config: { poll_seconds: 60 } }
 
-const React = await import(pathToFileURL(join(APP, 'node_modules/react/index.js')).href)
-const { renderToString } = await import(
-  pathToFileURL(join(APP, 'node_modules/react-dom/server.node.js')).href
-)
+const React = await import(pathToFileURL(react).href)
+const { renderToString } = await import(pathToFileURL(reactDom).href)
 const mod = await import(pathToFileURL(target).href)
 
 // Size tiers we care about, largest first.

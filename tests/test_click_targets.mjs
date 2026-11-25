@@ -9,17 +9,12 @@ import assert from 'node:assert'
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
-import { execFileSync } from 'node:child_process'
+import { APP_ROOT, requireLocalHermes } from './harness.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SRC = join(dirname(HERE), 'desktop', 'plugin.js')
-const PY = process.env.PYTHON_BIN ?? 'python3'
 
-const feed = JSON.parse(
-  execFileSync(PY, ['-I', join(HERE, 'probe_feed.py')], {
-    stdio: ['ignore', 'pipe', 'inherit']
-  }).toString()
-)
+const { feed } = requireLocalHermes({ testsDir: HERE })
 if (!feed.cards.length) {
   console.log('skip: no cards')
   process.exit(0)
@@ -53,7 +48,7 @@ const overrides = {
 }
 
 const stub = sdkNames.map(n => overrides[n] ?? `export const ${n} = () => null`).join('\n')
-const APP = '/Users/hermesmac/.hermes/hermes-agent/apps/desktop'
+const APP = APP_ROOT
 const dir = mkdtempSync(join(APP, '.inbox-clicks-'))
 writeFileSync(join(dir, 'sdk.mjs'), stub)
 

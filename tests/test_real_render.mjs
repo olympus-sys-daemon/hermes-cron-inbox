@@ -10,24 +10,17 @@
  * Run from apps/desktop so `react`/`react-dom` resolve to the app's own copies.
  */
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
-import { execFileSync } from 'node:child_process'
+import { APP_ROOT, requireLocalHermes } from './harness.mjs'
 
-const REPO = '/Users/hermesmac/.hermes/cache/scratch/hermes-inbox'
+const HERE_DIR = dirname(fileURLToPath(import.meta.url))
+const REPO = dirname(HERE_DIR)
 const SRC = join(REPO, 'desktop', 'plugin.js')
 const HERE = join(REPO, 'tests')
 
-// --- real feed payload ------------------------------------------------------
-const PY = process.env.PYTHON_BIN ?? 'python3'
-const feed = JSON.parse(
-  execFileSync(PY, ['-I', join(HERE, 'probe_feed.py')], { stdio: ['ignore', 'pipe', 'inherit'] }).toString()
-)
-if (!feed.cards?.length) {
-  console.log('skip: no cards in the feed')
-  process.exit(0)
-}
+// --- real feed payload, via the shared bootstrap ---------------------------
+const { feed } = requireLocalHermes({ testsDir: HERE })
 
 // --- stubs for the plugin SDK, real react otherwise -------------------------
 const src = readFileSync(SRC, 'utf8')
@@ -60,7 +53,6 @@ const sdkStub = sdkNames.map(n => overrides[n] ?? `export const ${n} = () => nul
 
 // The generated module must sit INSIDE the app tree so its bare `react` imports
 // resolve to the app's own copy. /tmp has no node_modules.
-const APP_ROOT = process.env.APP_ROOT ?? '/Users/hermesmac/.hermes/hermes-agent/apps/desktop'
 const dir = mkdtempSync(join(APP_ROOT, '.inbox-real-'))
 writeFileSync(join(dir, 'sdk.mjs'), sdkStub)
 
