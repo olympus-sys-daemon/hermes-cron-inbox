@@ -11,7 +11,7 @@ configuration, and no second copy of your data to drift.
 
 | Surface | Result |
 |---|---|
-| Sidebar row | **Inbox** |
+| Sidebar row | **Inbox** — appears after the desktop half is switched on (see Install) |
 | Page `/inbox` | chronological feed of runs across every profile |
 | Status bar chip | unread count, turns destructive on unread failures |
 | ⌘K command | "Open Inbox" |
@@ -45,12 +45,24 @@ reported nothing, and the Everything scope brings it back on demand.
 hermes plugins install olympus-sys-daemon/hermes-inbox
 ```
 
-Then two toggles, both required:
+Then **two switches**, both required. This bites everyone once: after step 1 the plugin is
+installed and enabled, the backend routes answer, and *the sidebar row still does not appear* —
+because a package's desktop half ships deliberately off.
 
-1. **Python half** — add `hermes-inbox` to `plugins.enabled` in `config.yaml` (or
-   `hermes plugins enable hermes-inbox`). The backend routes do nothing until this is set.
-2. **Desktop half** — the page is opt-in: enable **Inbox** in the app's Settings → Plugins.
-   If the row does not appear, run ⌘K → **Reload desktop plugins**.
+1. **Agent half** — `hermes plugins enable hermes-inbox` (or add it to `plugins.enabled`).
+   Without this the routes 404 and the page shows its "inbox unavailable" state.
+2. **Desktop half** — open **Capabilities → Plugins**, find **Inbox**, and switch it on
+   (the row shows a Desktop/GUI half with a switch; Settings → Plugins works too, by package
+   name). The page, sidebar row and status chip register only once this is on.
+
+Why it defaults off: a unified package's desktop half is stamped with a `.hermes-package.json`
+marker, and the loader reads that marker as `defaultEnabled: false` (`runtime-loader.ts`) — so
+every package's UI half is opt-in, matching the agent half's `plugins.enabled` gate. Your
+explicit toggle is stored per-app in `localStorage` and wins from then on.
+
+Already ticked and still nothing? Then it is a load error, not the switch: the app shows a
+"Plugin 'hermes-inbox' failed to load" toast and the plugin goes red in Capabilities → Plugins.
+⌘K → **Reload desktop plugins** re-reads the folder.
 
 Enable the plugin in every profile you want represented — the plugin reads the cron output of
 the profile it runs in, plus that profile's sibling directories.
