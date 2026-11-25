@@ -119,10 +119,25 @@ function relTime(stamp) {
   return `${Math.floor(secs / 86400)}d`
 }
 
+// Serialise the item filters into a real query string. `ctx.rest(['/items' + qs(p)'])`
+// is the ONLY correct call: ctx.rest takes a PATH, so handing it the params
+// object sends the request to `/api/plugins/<id>/[object Object]` and every
+// read 404s (the page then sits in its error state after the retries).
+function qs(params) {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '' || value === false) continue
+    search.set(key, String(value))
+  }
+  const text = search.toString()
+  return text ? `?${text}` : ''
+}
+
 function useInbox(queryClient, params, pollMs) {
+  const path = `/items${qs(params)}`
   const query = useQuery({
-    queryKey: [ID, 'items', params],
-    queryFn: () => ctxRest(params),
+    queryKey: [ID, 'items', path],
+    queryFn: () => ctxRest(path),
     refetchInterval: pollMs
   })
 
@@ -139,16 +154,6 @@ function useInbox(queryClient, params, pollMs) {
 // plugin's lifetime, so one module-level binding is safe and keeps the query
 // functions out of the component tree.
 let ctxRest = () => Promise.reject(new Error('inbox: ctx not bound yet'))
-
-function qs(params) {
-  const search = new URLSearchParams()
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === null || value === '' || value === false) continue
-    search.set(key, String(value))
-  }
-  const text = search.toString()
-  return text ? `?${text}` : ''
-}
 
 function ItemRow({ item, t, onOpen }) {
   const tone = item.error ? 'destructive' : item.unread ? 'default' : 'muted'

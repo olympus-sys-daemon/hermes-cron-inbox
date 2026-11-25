@@ -212,6 +212,18 @@ def test_search_matches_job_name():
     assert [i["job_name"] for i in body["items"]] == ["planner digest"]
 
 
+def test_the_exact_path_the_desktop_half_requests():
+    """Regression: the page once handed its params OBJECT to ctx.rest, so it
+    requested /api/plugins/hermes-inbox/[object Object]. This is the URL the
+    fixed page builds (see the harness in the repo's history); it must serve."""
+    assert client.get("/api/plugins/hermes-inbox/items?limit=300").status_code == 200
+    # And the full filter set the page sends.
+    full = ("/api/plugins/hermes-inbox/items?limit=300&unread_only=false"
+            "&errors_only=false&include_silent=false&include_muted=false")
+    body = client.get(full).json()
+    assert "items" in body and "total" in body
+
+
 def test_config_route_returns_declared_defaults():
     body = client.get("/api/plugins/hermes-inbox/config").json()
     assert body["include_silent_by_default"] is False
