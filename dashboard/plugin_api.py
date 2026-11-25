@@ -477,7 +477,7 @@ def _settings() -> dict[str, Any]:
     ``config_schema``; a missing or unparseable config yields those defaults
     rather than an error, because a settings read must never break the page.
     """
-    defaults = {"include_silent_by_default": False, "poll_seconds": 60}
+    defaults = {"include_silent_by_default": False, "poll_seconds": 60, "body_limit": 1200}
     try:
         from hermes_cli.config import load_config_readonly
 
@@ -497,9 +497,16 @@ def _settings() -> dict[str, Any]:
         poll = int(settings.get("poll_seconds", defaults["poll_seconds"]))
     except (TypeError, ValueError):
         poll = defaults["poll_seconds"]
+    try:
+        body_limit = int(settings.get("body_limit", defaults["body_limit"]))
+    except (TypeError, ValueError):
+        body_limit = defaults["body_limit"]
     return {
         "include_silent_by_default": bool(silent),
         "poll_seconds": max(10, min(poll, 3600)),
+        # Ragged on purpose: a 400-char card is a teaser nobody asked for, and
+        # 8000 already exceeds what anyone reads in a card.
+        "body_limit": max(400, min(body_limit, 8000)),
     }
 
 

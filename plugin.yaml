@@ -23,6 +23,15 @@ config_schema:
       Show runs that reported nothing ("silent (empty output)") as soon as the
       page opens. Off by default: a watcher that fires every 30 minutes mostly
       has nothing to say, and a feed of nothing is a feed nobody reads.
+  body_limit:
+    type: int
+    default: 1200
+    label: Report preview length (characters)
+    description: >-
+      How much of each report's text a card shows before "Show full report"
+      appears. Cron bodies range from a few hundred characters to ~250 KB, so
+      this is a per-card budget, not a page one. Larger values mean fewer
+      clicks and more scrolling; the full text is always one click away.
   poll_seconds:
     type: int
     default: 60

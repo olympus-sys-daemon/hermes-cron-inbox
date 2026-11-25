@@ -65,6 +65,11 @@ const LOCALES = {
     noMatch: 'No runs match this filter.',
     failed: 'Inbox unavailable',
     failedHint: 'The inbox backend did not answer. Is the plugin enabled in config.yaml?',
+    staleHost: 'Plugin needs a gateway restart',
+    staleHint:
+      'This plugin added a new endpoint, but the running gateway still has the old routes loaded. ' +
+      'Restart the gateway (or the app) and this page will work. Approving an update is enough — ' +
+      'nothing is broken on disk.',
     markAll: 'Mark all read',
     markedAll: n => (n === 1 ? '1 run marked read' : `${n} runs marked read`),
     markRead: 'Mark read',
@@ -433,13 +438,15 @@ function InboxPage({ ctx }) {
   const params = useMemo(
     () => ({
       limit: 60,
+      // The card budget is a declared setting; the server clamps it.
+      body_limit: Number(settings.data?.body_limit) || 1200,
       unread_only: filter === 'unread',
       errors_only: filter === 'errors',
       include_silent: false,
       include_muted: false,
       q: deferred
     }),
-    [filter, deferred]
+    [filter, deferred, settings.data?.body_limit]
   )
 
   const feed = useQuery({
@@ -615,18 +622,32 @@ function InboxPage({ ctx }) {
       })
     }
     if (feed.isError) {
+      const raw = String(feed.error?.message || feed.error || '')
+      // A 404 here is almost always a STALE ROUTE, not an empty inbox: the plugin
+      // host caches each plugin's FastAPI app by file path and never invalidates
+      // it, so a newly added endpoint does not exist until the gateway restarts.
+      // Saying that out loud beats showing an empty page that reads as "no data".
+      const stale = /\b404\b/.test(raw)
       return jsx('div', {
         className: 'grid h-full place-items-center px-6',
         children: jsx(ErrorState, {
-          title: t('failed'),
-          description: `${t('failedHint')}\n${String(feed.error?.message || '')}`
+          title: stale ? t('staleHost') : t('failed'),
+          description: `${stale ? t('staleHint') : t('failedHint')}\n${raw}`
         })
       })
     }
     if (!cards.length) {
+      // Distinguish "nothing to read" from "the page got no payload at all": an
+      // undefined `cards` means the response shape was not what this page expects,
+      // which is a deployment problem, not an empty inbox.
+      const payloadMissing = feed.data !== undefined && !Array.isArray(feed.data?.cards)
       return jsx(EmptyState, {
-        title: t('empty'),
-        description: deferred || filter !== 'all' ? t('noMatch') : t('emptyHint')
+        title: payloadMissing ? t('failed') : t('empty'),
+        description: payloadMissing
+          ? t('failedHint')
+          : deferred || filter !== 'all'
+            ? t('noMatch')
+            : t('emptyHint')
       })
     }
     return jsx(ScrollArea, {
