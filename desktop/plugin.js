@@ -65,6 +65,8 @@ const LOCALES = {
     openRaw: 'Click to open the raw document',
     showFull: 'Show full report',
     showLess: 'Show less',
+    emptyRun: 'This run reported nothing — a scheduled check that had nothing to say.',
+    runsCount: n => (n === 1 ? '1 run' : `${n} runs`),
     reported: 'Reported',
     everything: 'Everything',
     empty: 'Nothing to read',
@@ -236,18 +238,30 @@ function CardBody({ body, clamped, expanded, onToggle, onRaw, t }) {
 }
 
 /** The little run-history dots: one per recent run, coloured by outcome. */
-function RunDots({ recent, limit = 8 }) {
+/**
+ * Run history at a glance, and the way to open any one of them.
+ *
+ * These were decoration: you could see six runs existed but open none but the
+ * newest. They are buttons now, and each carries its own outcome, because a
+ * silent run is a legitimate click target that lands on an empty reader.
+ */
+function RunDots({ recent, limit = 8, onPick, t }) {
   const shown = recent.slice(0, limit)
   if (!shown.length) return null
 
   return jsx('span', {
     className: 'flex items-center gap-1',
     children: shown.map(run =>
-      jsx('span', {
+      jsx('button', {
         key: run.id,
-        title: `${fmtTime(run.stamp)}${run.error ? ' · error' : run.silent ? ' · silent' : ''}`,
+        type: 'button',
+        onClick: event => {
+          event.stopPropagation()
+          onPick(run)
+        },
+        title: `${fmtTime(run.stamp)}${run.error ? ` · ${t('error')}` : run.silent ? ` · ${t('silent')}` : ''}`,
         className: cn(
-          'h-1.5 w-1.5 rounded-full',
+          'h-2 w-2 shrink-0 rounded-full transition-transform hover:scale-150',
           run.error
             ? 'bg-destructive'
             : run.silent
@@ -261,7 +275,7 @@ function RunDots({ recent, limit = 8 }) {
   })
 }
 
-function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute, onRaw }) {
+function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute, onRaw, onPickRun }) {
   const [expanded, setExpanded] = useState(false)
 
   const badge = card.error
@@ -302,7 +316,11 @@ function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute, onRaw }) {
             ? jsx(Badge, { variant: 'outline', size: 'xs', children: card.profile })
             : null,
           jsx('span', { className: 'flex-1' }),
-          jsx(RunDots, { recent: card.recent }),
+          jsx(RunDots, {
+            recent: card.recent,
+            t,
+            onPick: run => onPickRun(card, run.id)
+          }),
           jsx('span', {
             className: 'shrink-0 text-[0.6875rem] tabular-nums text-(--ui-text-tertiary)',
             title: fmtTime(card.stamp),
@@ -382,6 +400,115 @@ function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute, onRaw }) {
   })
 }
 
+/**
+ * The run history for one job: every run, newest first, each openable.
+ *
+ * Silent runs are listed too, marked as such - hiding them would make the list
+ * disagree with the dot row, and "where did the 19:04 run go?" is the question
+ * this page exists to answer.
+ */
+function HistoryPanel({ job, t, onOpen, onBack }) {
+  const runs = useQuery({
+    queryKey: [ID, 'history', job.profile, job.job_id],
+    queryFn: () =>
+      ctxRest(
+        `/items?profile=${encodeURIComponent(job.profile)}` +
+          `&job_id=${encodeURIComponent(job.job_id)}` +
+          `&include_silent=true&include_muted=true&limit=200`
+      ),
+    staleTime: 15_000
+  })
+
+  const rows = runs.data?.items ?? []
+
+  return jsxs('div', {
+    className: 'flex h-full min-h-0 flex-col',
+    children: [
+      jsxs('div', {
+        className:
+          'flex shrink-0 items-center gap-2 border-b border-(--ui-stroke-secondary) px-3 py-2',
+        children: [
+          jsxs(Button, {
+            variant: 'ghost',
+            size: 'sm',
+            onClick: onBack,
+            className: 'gap-1',
+            children: [jsx(Codicon, { name: 'arrow-left', size: '0.75rem' }), t('back')]
+          }),
+          jsx('span', { className: 'truncate text-sm font-medium', children: job.job_name }),
+          jsx('span', {
+            className: 'text-[0.6875rem] text-(--ui-text-tertiary)',
+            children: t('runsCount', rows.length)
+          })
+        ]
+      }),
+      jsx(ScrollArea, {
+        className: 'min-h-0 flex-1',
+        children: runs.isLoading
+          ? jsx('div', {
+              className: 'flex flex-col gap-1 px-3 pt-2',
+              children: [0, 1, 2, 3].map(i =>
+                jsx(Skeleton, { key: i, className: 'h-10 w-full rounded-md' })
+              )
+            })
+          : jsx('div', {
+              className: 'flex flex-col gap-0.5 px-1 py-1',
+              children: rows.map(run =>
+                jsxs(
+                  'button',
+                  {
+                    key: run.id,
+                    type: 'button',
+                    onClick: () => onOpen(run),
+                    className: cn(
+                      'flex w-full items-baseline gap-2 rounded-md px-2 py-1.5 text-left',
+                      'transition-colors hover:bg-(--chrome-action-hover)'
+                    ),
+                    children: [
+                      jsx('span', {
+                        className: cn(
+                          'w-1.5 shrink-0 self-center rounded-full',
+                          run.error
+                            ? 'h-1.5 bg-destructive'
+                            : run.silent
+                              ? 'h-1.5 bg-(--ui-stroke-tertiary)'
+                              : 'h-1.5 bg-(--ui-accent)'
+                        )
+                      }),
+                      jsx('span', {
+                        className: cn(
+                          'shrink-0 text-[0.6875rem] tabular-nums',
+                          'text-(--ui-text-secondary)'
+                        ),
+                        children: fmtTime(run.stamp)
+                      }),
+                      jsx('span', {
+                        className: cn(
+                          'min-w-0 flex-1 truncate text-xs',
+                          run.silent
+                            ? 'italic text-(--ui-text-tertiary)'
+                            : 'text-(--ui-text-primary)'
+                        ),
+                        children: run.silent ? t('silent') : run.preview || ''
+                      }),
+                      run.unread
+                        ? jsx('span', {
+                            key: 'u',
+                            className: 'shrink-0 text-[0.625rem] text-(--ui-accent)',
+                            children: t('new')
+                          })
+                        : null
+                    ]
+                  },
+                  run.id
+                )
+              )
+            })
+      })
+    ]
+  })
+}
+
 /** One run, opened from a card's history. Keeps the old reader. */
 function Reader({ item, t, onBack, onRead, onMute }) {
   const detail = useQuery({
@@ -455,7 +582,21 @@ function Reader({ item, t, onBack, onRead, onMute }) {
                   jsx(Skeleton, { className: 'h-4 w-5/6' })
                 ]
               })
-            : jsx(MessageTextContent, { text: body || item.preview || '' })
+            : body || item.preview
+              ? jsx(MessageTextContent, { text: body || item.preview })
+              : jsx('div', {
+                  // A blank pane reads as a bug. A silent run legitimately has no
+                  // body, so the reader must say which it is.
+                  className: 'flex flex-col gap-1 py-6 text-xs text-(--ui-text-tertiary)',
+                  children: [
+                    jsx('span', { key: 'note', children: t('emptyRun') }),
+                    jsx('span', {
+                      key: 'when',
+                      className: 'text-(--ui-text-secondary)',
+                      children: `${t('runAt')}: ${fmtTime(item.stamp)}`
+                    })
+                  ]
+                })
         })
       })
     ]
@@ -476,6 +617,8 @@ function InboxPage({ ctx }) {
   const [search, setSearch] = useState('')
   const [deferred, setDeferred] = useState('')
   const [open, setOpen] = useState(null)
+  // A job whose run list is showing. Distinct from `open` (one run).
+  const [history, setHistory] = useState(null)
 
   // Debounce the search box: a keystroke should not become a directory walk.
   useEffect(() => {
@@ -578,9 +721,21 @@ function InboxPage({ ctx }) {
     refresh()
   }, [refresh, t])
 
-  const openHistory = useCallback(
-    card => {
-      const run = card.recent[0]
+  /**
+   * Open one run in the reader.
+   *
+   * `runId` matters: the card's body comes from the newest REPORTED run, while
+   * `recent[0]` is the newest run of ANY kind. A watcher whose last tick was
+   * silent therefore has a card full of text and a `recent[0]` that is empty -
+   * clicking it opened a blank reader (or a literal `[SILENT]`). Every caller
+   * must name the run it means.
+   */
+  const openRun = useCallback(
+    (card, runId) => {
+      const run =
+        card.recent.find(r => r.id === runId) ??
+        card.recent.find(r => r.id === card.latest_id) ??
+        card.recent[0]
       if (!run) return
       setOpen({
         id: run.id,
@@ -600,11 +755,44 @@ function InboxPage({ ctx }) {
     []
   )
 
-  // Both doors land in the Reader; `raw` just opens the newest run without
-  // making the reader pick one from the dot row. Declared AFTER openHistory:
-  // a dependency array is evaluated immediately, so referencing a later const
-  // would throw at render time.
-  const openRaw = useCallback(card => openHistory(card), [openHistory])
+  /** The body printed on the card: open THAT run, so the reader shows what you clicked. */
+  const openRaw = useCallback(card => openRun(card, card.latest_id), [openRun])
+
+  /**
+   * History: a LIST of this job's runs, not a jump to one of them.
+   *
+   * The earlier version opened the newest reported run, which made the button
+   * indistinguishable from clicking the body - reported as "history just shows
+   * the current output". History has to be a chooser or it has no reason to
+   * exist.
+   */
+  const openHistory = useCallback(card => {
+    setHistory({ profile: card.profile, job_id: card.job_id, job_name: card.job_name })
+  }, [])
+
+  if (history) {
+    return jsx(HistoryPanel, {
+      job: history,
+      t,
+      onOpen: run =>
+        openRun(
+          // Build a card-shaped object so openRun can name the run.
+          {
+            job_name: history.job_name,
+            profile: history.profile,
+            recent: [run],
+            latest_id: run.id,
+            muted: false,
+            schedule: run.schedule,
+            is_script: run.is_script,
+            deliver: run.deliver,
+            chars: run.chars
+          },
+          run.id
+        ),
+      onBack: () => setHistory(null)
+    })
+  }
 
   if (open) {
     return jsx(Reader, {
@@ -729,7 +917,8 @@ function InboxPage({ ctx }) {
             onOpenHistory: openHistory,
             onMarkJobRead: markJobRead,
             onMute: markMuted,
-            onRaw: () => openRaw(card)
+            onRaw: () => openRaw(card),
+            onPickRun: openRun
           })
         )
       })

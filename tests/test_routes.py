@@ -272,6 +272,37 @@ def test_feed_body_is_cleaned_of_banner_furniture():
     assert first.casefold() != "loud watcher"
 
 
+def test_feed_output_is_the_same_document_that_clicking_opens():
+    """The card body and the run you open from it must be ONE document.
+
+    The bug this pins: the body came from the newest REPORTED run while
+    `recent[0]` was the newest run of ANY kind. A watcher whose last tick was
+    silent therefore had a card full of text and opened an empty reader - which
+    reads as data loss, not as "that run was silent".
+    """
+    path = "/api/plugins/hermes-cron-inbox"
+    feed = client.get(f"{path}/feed?include_silent=true").json()
+
+    checked = 0
+    for card in feed["cards"]:
+        if not card["body"]:
+            continue
+
+        opened = client.get(f"{path}/items/{card['latest_id']}").json()
+
+        assert opened.get("body"), (
+            f"{card['job_name']}: the card shows {len(card['body'])} chars of body "
+            f"but opening latest_id ({card['latest_id']}) gives an empty document"
+        )
+        assert card["body"][:80] in opened["body"], (
+            f"{card['job_name']}: the opened run is a DIFFERENT document from the "
+            f"card body"
+        )
+        checked += 1
+
+    assert checked > 0, "no card with a body to check"
+
+
 def test_feed_unread_ignores_silent_runs():
     # A silent run is never displayed, so it must not make a card claim "New".
     for card in client.get("/api/plugins/hermes-cron-inbox/feed?include_silent=true").json()["cards"]:
