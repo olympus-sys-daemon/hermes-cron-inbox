@@ -1,0 +1,184 @@
+# Hermes Inbox
+
+An inbox for the cron reports Hermes already writes.
+
+Hermes writes every scheduled run to `cron/output/<job_id>/<timestamp>.md` — including jobs
+that deliver to Discord, Telegram or email. The Inbox is a **view** over those files: install
+it and every watcher you already have shows up. No delivery changes, no webhooks, no per-job
+configuration, and no second copy of your data to drift.
+
+## What it adds
+
+| Surface | Result |
+|---|---|
+| Sidebar row | **Inbox** |
+| Page `/inbox` | chronological feed of runs across every profile |
+| Status bar chip | unread count, turns destructive on unread failures |
+| ⌘K command | "Open Inbox" |
+
+Plus read/unread state, per-run mute, search, and three filters (All / Unread / Errors) with a
+Reported / Everything scope switch.
+
+## Why it exists
+
+Discord and email are fine transports and poor reading surfaces: a long structured report gets
+truncated, a watcher that fires every 30 minutes mostly has nothing to say, and nothing is
+searchable afterwards. The desktop app's own Cron page is job-centric — you expand a job to find
+its history one run at a time.
+
+The Inbox is chronological, cross-job, cross-profile, and it hides the noise.
+
+### Hiding the noise is the whole trick
+
+On a real install, ~78% of stored documents are silent runs:
+
+```
+241 documents on disk · 188 silent · 53 with something to report
+```
+
+A feed of "nothing happened" is a feed nobody opens. So a run is silently hidden when it
+reported nothing, and the Everything scope brings it back on demand.
+
+## Install
+
+```bash
+hermes plugins install olympus-sys-daemon/hermes-inbox
+```
+
+Then two toggles, both required:
+
+1. **Python half** — add `hermes-inbox` to `plugins.enabled` in `config.yaml` (or
+   `hermes plugins enable hermes-inbox`). The backend routes do nothing until this is set.
+2. **Desktop half** — the page is opt-in: enable **Inbox** in the app's Settings → Plugins.
+   If the row does not appear, run ⌘K → **Reload desktop plugins**.
+
+Enable the plugin in every profile you want represented — the plugin reads the cron output of
+the profile it runs in, plus that profile's sibling directories.
+
+## How it reads a run document
+
+There are two document shapes and they are not interchangeable. Assuming one is the most common
+way to build this wrong.
+
+**Script runs** (`no_agent`) — a short header, a `---` rule, then raw stdout:
+
+```markdown
+# Cron Job: PortWatch VI watcher
+
+**Job ID:** abc123
+**Run Time:** 2026-11-25 13:59:19
+**Mode:** no_agent (script)
+
+---
+
+PortWatch VI · 2026-11-25 11:59 UTC
+Leader : Belobug · 77.4%
+```
+
+A silent script run gets a `**Status:** silent (empty output)` line in its header. A script run
+**with output has no status line at all** — so "contains the word silent" is the wrong rule; the
+right one is "has a silent status".
+
+**Agent runs** — a length-framed archive. The whole prompt is embedded, then the response:
+
+```markdown
+**Prompt Characters:** 168571
+## Prompt
+
+[168 KB of prompt]
+
+**Response Characters:** 35
+## Response
+
+curator: 9 edits (memory 8, user 1)
+```
+
+The prompt routinely outweighs the response by three orders of magnitude, so the file is never
+rendered verbatim. Only the framed response becomes the inbox content. The frame is validated
+against its declared length, which means a prompt (or a response) that happens to quote
+`## Response` cannot forge a boundary — and a truncated write yields *no* body rather than
+prompt noise.
+
+| Header / body | Meaning | Shown |
+|---|---|---|
+| no `Status:` + body after `---` | real output | yes |
+| `Status: silent (empty output)` | nothing happened | hidden |
+| `Status: silent (wakeAgent=false)` | script gate stayed quiet | hidden |
+| `Status: no_change` | monitor diff was empty | hidden |
+| `Status: BLOCKED` / `script failed` | broke | yes, flagged |
+| agent response `[CRON_FAILURE]` | broke | yes, flagged |
+| agent response `[SILENT]` | nothing happened | hidden |
+
+## Data and storage
+
+The Inbox stores **only** read/mute state, keyed by `profile|job_id|timestamp`, in
+`<HERMES_HOME>/plugin-data/hermes-inbox/inbox.db`. Bodies are re-read from disk on demand and
+memoised on `(mtime, size)`, so a 170 KB archive is parsed once, not on every render.
+
+Cron keeps the newest 50 documents per job (`cron.output_retention`). This is an inbox, not an
+archive: read-state for documents cron has pruned is dropped on the next scan.
+
+## API
+
+All routes mount under `/api/plugins/hermes-inbox/`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | root path, profiles seen, cron homes found |
+| `GET` | `/items` | feed — `limit`, `offset`, `unread_only`, `include_silent`, `include_muted`, `errors_only`, `profile`, `job_id`, `q` |
+| `GET` | `/items/{id}` | one run with its full body and source path |
+| `POST` | `/items/{id}/read` | `{read: bool}` |
+| `POST` | `/items/{id}/mute` | `{muted: bool}` |
+| `POST` | `/mark-all-read` | `{profile?, include_silent?}` |
+| `GET` | `/summary` | counters for the chip |
+| `GET` | `/jobs` | per-job aggregation (docs, unread, errors, silent) |
+
+Item ids are `profile|job_id|YYYY-MM-DD_HH-MM-SS`; malformed ids and traversal attempts are
+refused before any path is built.
+
+## Settings
+
+From the app's Settings → Plugins:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `include_silent_by_default` | `false` | open on the Everything scope |
+| `poll_seconds` | `60` | backstop refresh; `cron.changed` drives live updates |
+
+## Limitations
+
+- **In-app only.** A page cannot notify you when the app is closed. The chip covers the
+  "Hermes is open, something arrived" case; for "tell me when I am away" keep a delivery
+  target (Discord, ntfy, …) and let the Inbox be where you read it.
+- **Bodies live in cron's retention window**, not forever.
+- **Read-only over cron.** Nothing here triggers, edits, pauses or deletes a job.
+
+## Development
+
+```bash
+# tests need a Python with fastapi + pydantic (the gateway's own venv)
+python tests/test_parse.py     # document parser, incl. the live corpus
+python tests/test_routes.py    # every route against a sandboxed fixture tree
+
+hermes plugins validate .
+hermes plugins doctor .
+```
+
+Both test files run as plain scripts *and* under pytest — `pytest` is optional on purpose, so
+they work on a machine that has no test dependencies installed.
+
+## Layout
+
+```
+plugin.yaml              manifest; kind: standalone
+__init__.py              agent half (deliberately registers nothing)
+dashboard/
+  manifest.json          declares plugin_api.py as the route module
+  plugin_api.py          scan, parse, routes, read state
+desktop/plugin.js        the page, sidebar row, status chip, palette command
+tests/                   parser + route tests
+```
+
+## License
+
+MIT

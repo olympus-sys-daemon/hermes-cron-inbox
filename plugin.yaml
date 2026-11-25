@@ -1,0 +1,37 @@
+name: hermes-inbox
+label: Inbox
+kind: standalone
+version: 1.0.0
+author: olympus-sys-daemon
+license: MIT
+homepage: https://github.com/olympus-sys-daemon/hermes-inbox
+description: >
+  An inbox for the cron run documents Hermes already writes. Adds an Inbox
+  page to the desktop app that lists every scheduled job's output across all
+  profiles, hides the runs that had nothing to report, and remembers what you
+  have read. Pure view: no delivery, no webhooks, no per-job configuration.
+requires_hermes: ">=0.19"
+requires_env: []
+provides_tools: []
+provides_hooks: []
+config_schema:
+  include_silent_by_default:
+    type: bool
+    default: false
+    label: Show silent runs on open
+    description: >-
+      Show runs that reported nothing ("silent (empty output)") as soon as the
+      page opens. Off by default: a watcher that fires every 30 minutes mostly
+      has nothing to say, and a feed of nothing is a feed nobody reads.
+  poll_seconds:
+    type: int
+    default: 60
+    label: Backstop refresh (seconds)
+    description: >-
+      How often to re-read the cron output folders when no change event
+      arrives. cron.changed drives live updates, so this is only a safety net.
+tags:
+  - cron
+  - inbox
+  - notifications
+  - desktop

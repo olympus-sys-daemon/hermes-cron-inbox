@@ -1,0 +1,55 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # The plugin's own runtime deps are provided by Hermes (fastapi,
+          # pydantic). Pin nothing here: this job proves the code works against
+          # a current FastAPI, not against a version the plugin selected.
+          pip install fastapi pytest httpx
+
+      - name: Parser tests (synthetic + any corpus present)
+        run: python tests/test_parse.py
+
+      - name: Route tests
+        run: python tests/test_routes.py
+
+      - name: Same tests under pytest
+        run: pytest tests -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Byte-compile the backend
+        run: python -m py_compile dashboard/plugin_api.py __init__.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Syntax-check the desktop half
+        # The app loads plugin.js uncompiled, so a syntax error is a load
+        # failure. node --check is the cheapest gate that catches it.
+        run: node --check desktop/plugin.js

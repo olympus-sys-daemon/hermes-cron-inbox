@@ -1,0 +1,17 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Plugin runtime state (never committed: read state belongs to an install)
+plugin-data/
+*.db
+*.db-wal
+*.db-shm
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Test scratch
+.pytest_cache/
