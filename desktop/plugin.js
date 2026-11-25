@@ -38,7 +38,8 @@ const CHANGED_EVENT = 'cron.changed'
 // The inbox is a view over files the scheduler writes in the background, so
 // cron.changed (jobs.json moved: a tick's bookkeeping or CRUD) is the real
 // signal and this poll is only a backstop. Same shape core's own Cron surfaces use.
-const POLL_MS = 60_000
+// Overridable from the plugin's own settings (GET /config).
+const DEFAULT_POLL_MS = 60_000
 
 const FILTERS = [
   { id: 'all', label: 'All' },
@@ -118,11 +119,11 @@ function relTime(stamp) {
   return `${Math.floor(secs / 86400)}d`
 }
 
-function useInbox(queryClient, params) {
+function useInbox(queryClient, params, pollMs) {
   const query = useQuery({
     queryKey: [ID, 'items', params],
     queryFn: () => ctxRest(params),
-    refetchInterval: POLL_MS
+    refetchInterval: pollMs
   })
 
   useEffect(() => {
@@ -299,8 +300,18 @@ function Reader({ item, t, onBack, onRead, onMute }) {
 function InboxPage({ ctx }) {
   const t = useLocale()
   const queryClient = useQueryClient()
+  const settings = useQuery({
+    queryKey: [ID, 'config'],
+    queryFn: () => ctxRest('/config'),
+    staleTime: 5 * 60_000
+  })
+  const pollMs = Math.max(10, Number(settings.data?.poll_seconds) || 60) * 1000
+
   const [filter, setFilter] = useState('all')
-  const [scope, setScope] = useState('visible')
+  // The plugin's own setting decides what the first open shows; the segmented
+  // control still overrides it for the session.
+  const [scope, setScope] = useState(null)
+  const effectiveScope = scope ?? (settings.data?.include_silent_by_default ? 'everything' : 'visible')
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState(null)
   const [deferred, setDeferred] = useState('')
@@ -316,14 +327,14 @@ function InboxPage({ ctx }) {
       limit: 300,
       unread_only: filter === 'unread',
       errors_only: filter === 'errors',
-      include_silent: scope === 'everything',
-      include_muted: scope === 'everything',
+      include_silent: effectiveScope === 'everything',
+      include_muted: effectiveScope === 'everything',
       q: deferred
     }),
-    [filter, scope, deferred]
+    [filter, effectiveScope, deferred]
   )
 
-  const query = useInbox(queryClient, params)
+  const query = useInbox(queryClient, params, pollMs)
 
   const items = query.data?.items ?? []
   const unread = query.data?.unread ?? 0
@@ -425,7 +436,7 @@ function InboxPage({ ctx }) {
           }),
           jsx(SegmentedControl, {
             options: SCOPES.map(s => ({ id: s.id, label: t(s.id) })),
-            value: scope,
+            value: effectiveScope,
             onChange: setScope,
             sizing: 'content'
           }),
@@ -493,7 +504,7 @@ function UnreadChip() {
   const query = useQuery({
     queryKey: [ID, 'summary'],
     queryFn: () => ctxRest('/summary'),
-    refetchInterval: POLL_MS
+    refetchInterval: DEFAULT_POLL_MS
   })
   const count = query.data?.unread ?? 0
   const errors = query.data?.errors ?? 0

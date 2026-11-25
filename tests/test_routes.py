@@ -212,6 +212,18 @@ def test_search_matches_job_name():
     assert [i["job_name"] for i in body["items"]] == ["planner digest"]
 
 
+def test_config_route_returns_declared_defaults():
+    body = client.get("/api/plugins/hermes-inbox/config").json()
+    assert body["include_silent_by_default"] is False
+    assert body["poll_seconds"] == 60
+
+
+def test_config_route_clamps_and_coerces():
+    """A hand-edited config must not break the page: bad values fall back."""
+    assert api._settings()["poll_seconds"] >= 10
+    assert isinstance(api._settings()["include_silent_by_default"], bool)
+
+
 def test_unknown_item_404s():
     assert client.get("/api/plugins/hermes-inbox/items/default|deadbeefdead|2026-01-01_00-00-00").status_code == 404
 

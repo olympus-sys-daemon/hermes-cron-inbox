@@ -132,6 +132,7 @@ All routes mount under `/api/plugins/hermes-inbox/`.
 | `POST` | `/mark-all-read` | `{profile?, include_silent?}` |
 | `GET` | `/summary` | counters for the chip |
 | `GET` | `/jobs` | per-job aggregation (docs, unread, errors, silent) |
+| `GET` | `/config` | this plugin's settings (the desktop half cannot call `ctx.get_config`) |
 
 Item ids are `profile|job_id|YYYY-MM-DD_HH-MM-SS`; malformed ids and traversal attempts are
 refused before any path is built.
@@ -145,6 +146,37 @@ From the app's Settings → Plugins:
 | `include_silent_by_default` | `false` | open on the Everything scope |
 | `poll_seconds` | `60` | backstop refresh; `cron.changed` drives live updates |
 
+## Using it against a remote gateway
+
+Yes, with one installation difference that is easy to trip over.
+
+**The UI half runs on the machine the app window runs on. The data half runs on the gateway.**
+These are different files, and on a remote backend they are installed separately:
+
+| Half | Where it lives | What it talks to |
+|---|---|---|
+| `desktop/plugin.js` | the computer running the Desktop app | this machine's plugin folder |
+| `dashboard/plugin_api.py` | the gateway machine | that machine's `cron/output/` |
+
+`ctx.rest` is connection-scoped — every call carries the connection the window is pointed at — so
+the page reads the **remote** gateway's cron documents, not the local ones. The plugin folder is
+app-level, deliberately: the docs state it stays installed across "every profile, gateway, or
+remote machine the window connects to".
+
+The catch is installation. `hermes plugins install` runs on the gateway and puts the Python half
+there; it cannot reach the client's `~/.hermes/plugins` over a filesystem, so the desktop half has
+to be installed by the app:
+
+1. Install the agent half on the gateway: `hermes plugins install owner/repo`, then enable it.
+2. On the machine running Desktop, open **Capabilities → Plugins → Install from Git**, paste the
+   same repo, and make sure the **Desktop** component is checked.
+
+The plugin's row then shows its desktop half as *unavailable (remote backend)* until step 2 —
+that is the normal, correct state, not a bug.
+
+The **webapp** (browser, `hermes webapp`) is simpler: its backend *is* the gateway that serves the
+tab, so one install covers both halves and the server copies the desktop half itself.
+
 ## Limitations
 
 - **In-app only.** A page cannot notify you when the app is closed. The chip covers the
@@ -152,6 +184,8 @@ From the app's Settings → Plugins:
   target (Discord, ntfy, …) and let the Inbox be where you read it.
 - **Bodies live in cron's retention window**, not forever.
 - **Read-only over cron.** Nothing here triggers, edits, pauses or deletes a job.
+- Runs listed are the ones stored on the gateway the window is connected to. Switching
+  connections switches the inbox with it.
 
 ## Development
 

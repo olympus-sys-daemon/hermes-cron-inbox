@@ -431,6 +431,46 @@ async def health() -> dict[str, Any]:
     }
 
 
+def _settings() -> dict[str, Any]:
+    """This plugin's own ``plugins.entries.hermes-inbox.settings`` values.
+
+    The desktop half cannot call ``ctx.get_config`` (that is an agent-side
+    facade), so it reads them here. Defaults are declared in ``plugin.yaml``'s
+    ``config_schema``; a missing or unparseable config yields those defaults
+    rather than an error, because a settings read must never break the page.
+    """
+    defaults = {"include_silent_by_default": False, "poll_seconds": 60}
+    try:
+        from hermes_cli.config import load_config_readonly
+
+        config = load_config_readonly() or {}
+    except Exception:
+        return defaults
+    try:
+        entry = ((config.get("plugins") or {}).get("entries") or {}).get("hermes-inbox") or {}
+        settings = entry.get("settings") or {}
+    except AttributeError:
+        return defaults
+    if not isinstance(settings, dict):
+        return defaults
+
+    silent = settings.get("include_silent_by_default", defaults["include_silent_by_default"])
+    try:
+        poll = int(settings.get("poll_seconds", defaults["poll_seconds"]))
+    except (TypeError, ValueError):
+        poll = defaults["poll_seconds"]
+    return {
+        "include_silent_by_default": bool(silent),
+        "poll_seconds": max(10, min(poll, 3600)),
+    }
+
+
+@router.get("/config")
+async def get_config() -> dict[str, Any]:
+    """The client's view of this plugin's settings."""
+    return _settings()
+
+
 @router.get("/items")
 async def list_items(
     limit: int = 100,
