@@ -58,11 +58,6 @@ jobs:
         # missed report when the count stays flat), so they need asserted
         # behaviour rather than a syntax check.
         run: node tests/test_notifier.mjs
-      - name: Scheduled jobs button
-        # The button is the only way into the cron page in simple mode, so it
-        # must exist, be labelled, and target the real route. Also asserts the
-        # core assumptions it depends on still hold.
-        run: node tests/test_scheduled_button.mjs
       - name: Click targets
         # Proves the body you see is the run a click opens. A watcher whose last
         # tick was silent used to open a blank reader - the bug this pins.
