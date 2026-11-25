@@ -44,7 +44,10 @@ const DEFAULT_POLL_MS = 60_000
 const FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'unread', label: 'Unread' },
-  { id: 'errors', label: 'Errors' }
+  { id: 'errors', label: 'Errors' },
+  // Without this, muting a job removes it from the page with no way back: the
+  // mute lives on the RUNS, so the card simply stops appearing.
+  { id: 'muted', label: 'Muted' }
 ]
 
 const LOCALES = {
@@ -58,6 +61,10 @@ const LOCALES = {
     errors: 'Errors',
     new: 'New',
     history: 'History',
+    raw: 'Raw',
+    openRaw: 'Click to open the raw document',
+    showFull: 'Show full report',
+    showLess: 'Show less',
     reported: 'Reported',
     everything: 'Everything',
     empty: 'Nothing to read',
@@ -156,13 +163,32 @@ let ctxRest = () => Promise.reject(new Error('inbox: ctx not bound yet'))
 // history or the untruncated text.
 
 /** A card's body: monospace, preserved line breaks, clamped to a line budget. */
-function CardBody({ body, clamped, expanded, onToggle }) {
+function CardBody({ body, clamped, expanded, onToggle, onRaw, t }) {
   return jsxs('div', {
     className: 'relative',
     children: [
+      // Clicking the text opens the raw document. The card is a reading view;
+      // the original file is one act away, which is what "give me the raw one"
+      // means when you are already looking at the content.
       jsx('div', {
+        key: 'text',
+        role: 'button',
+        tabIndex: 0,
+        onClick: onRaw,
+        onKeyDown: e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onRaw()
+          }
+        },
+        title: t('openRaw'),
         className: cn(
-          'whitespace-pre-wrap break-words text-[0.75rem] leading-[1.45] text-(--ui-text-secondary)',
+          'cursor-pointer whitespace-pre-wrap break-words rounded-sm',
+          // Body text at 88% of foreground, not the 74% "secondary" shade: on a
+          // light theme 74% reads as grey-on-grey, and this is the text people
+          // are actually here to read.
+          'text-[0.75rem] leading-[1.5] text-(--ui-text-primary)',
+          'transition-colors hover:bg-(--ui-row-hover-background)',
           // Only clamp when there is more to show; a short report must not get
           // an expander it does not need.
           clamped && !expanded ? 'line-clamp-[14]' : ''
@@ -171,20 +197,40 @@ function CardBody({ body, clamped, expanded, onToggle }) {
         // keeps the aligned columns of script reports readable.
         children: body
       }),
-      clamped
-        ? jsxs('button', {
+      jsxs('div', {
+        key: 'actions',
+        className: 'mt-1 flex items-center gap-3',
+        children: [
+          clamped
+            ? jsxs('button', {
+                key: 'toggle',
+                type: 'button',
+                onClick: onToggle,
+                className: cn(
+                  'flex items-center gap-1 text-[0.6875rem] text-(--ui-text-secondary)',
+                  'transition-colors hover:text-foreground'
+                ),
+                children: [
+                  jsx(Codicon, { name: expanded ? 'chevron-up' : 'chevron-down', size: '0.625rem' }),
+                  jsx('span', { children: expanded ? t('showLess') : t('showFull') })
+                ]
+              })
+            : null,
+          jsx('button', {
+            key: 'raw',
             type: 'button',
-            onClick: onToggle,
+            onClick: onRaw,
             className: cn(
-              'mt-1 flex items-center gap-1 text-[0.6875rem] text-(--ui-text-quaternary)',
+              'flex items-center gap-1 text-[0.6875rem] text-(--ui-text-secondary)',
               'transition-colors hover:text-foreground'
             ),
             children: [
-              jsx(Codicon, { name: expanded ? 'chevron-up' : 'chevron-down', size: '0.625rem' }),
-              jsx('span', { children: expanded ? 'Show less' : 'Show full report' })
+              jsx(Codicon, { name: 'file-code', size: '0.625rem' }),
+              jsx('span', { children: t('raw') })
             ]
           })
-        : null
+        ]
+      })
     ]
   })
 }
@@ -208,14 +254,14 @@ function RunDots({ recent, limit = 8 }) {
               ? 'bg-(--ui-stroke-tertiary)'
               : run.unread
                 ? 'bg-(--ui-accent)'
-                : 'bg-(--ui-text-quaternary)/45'
+                : 'bg-(--ui-text-tertiary)/60'
         )
       })
     )
   })
 }
 
-function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute }) {
+function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute, onRaw }) {
   const [expanded, setExpanded] = useState(false)
 
   const badge = card.error
@@ -258,7 +304,7 @@ function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute }) {
           jsx('span', { className: 'flex-1' }),
           jsx(RunDots, { recent: card.recent }),
           jsx('span', {
-            className: 'shrink-0 text-[0.625rem] tabular-nums text-(--ui-text-quaternary)',
+            className: 'shrink-0 text-[0.6875rem] tabular-nums text-(--ui-text-tertiary)',
             title: fmtTime(card.stamp),
             children: relTime(card.stamp)
           })
@@ -269,18 +315,20 @@ function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute }) {
       card.body
         ? jsx(CardBody, {
             body: card.body,
+            t,
             clamped: card.chars > card.body.length || card.truncated,
             expanded,
-            onToggle: () => setExpanded(v => !v)
+            onToggle: () => setExpanded(v => !v),
+            onRaw: () => onOpenHistory(card)
           })
         : jsx('div', {
-            className: 'text-xs italic text-(--ui-text-quaternary)',
+            className: 'text-xs italic text-(--ui-text-tertiary)',
             children: t('silent')
           }),
 
       // ---- footer ----------------------------------------------------------
       jsxs('div', {
-        className: 'flex flex-wrap items-center gap-2 text-[0.625rem] text-(--ui-text-quaternary)',
+        className: 'flex flex-wrap items-center gap-2 text-[0.6875rem] text-(--ui-text-tertiary)',
         children: [
           card.schedule ? jsx('span', { children: card.schedule }) : null,
           jsx('span', { children: `· ${card.is_script ? t('script') : t('agent')}` }),
@@ -385,7 +433,7 @@ function Reader({ item, t, onBack, onRead, onMute }) {
         ]
       }),
       jsxs('div', {
-        className: 'shrink-0 px-4 py-2 text-[0.6875rem] text-(--ui-text-quaternary)',
+        className: 'shrink-0 px-4 py-2 text-[0.6875rem] text-(--ui-text-tertiary)',
         children: [
           jsx('span', { children: `${t('runAt')}: ${fmtTime(item.stamp)}` }),
           item.schedule ? jsx('span', { children: ` · ${item.schedule}` }) : null,
@@ -442,8 +490,10 @@ function InboxPage({ ctx }) {
       body_limit: Number(settings.data?.body_limit) || 1200,
       unread_only: filter === 'unread',
       errors_only: filter === 'errors',
+      muted_only: filter === 'muted',
       include_silent: false,
-      include_muted: false,
+      // The Muted tab must see muted jobs; every other tab must not.
+      include_muted: filter === 'muted',
       q: deferred
     }),
     [filter, deferred, settings.data?.body_limit]
@@ -495,9 +545,17 @@ function InboxPage({ ctx }) {
   const markMuted = useCallback(
     async (card, muted) => {
       try {
-        await ctxRest(`/items/${encodeURIComponent(card.latest_id)}/mute`, {
-          method: 'POST',
-          body: { muted }
+        // Job-level: muting only the newest run left the job half-hidden and
+        // reappearing as older runs surfaced.
+        await ctxRest(
+          `/jobs/${encodeURIComponent(card.profile)}/${encodeURIComponent(card.job_id)}/mute`,
+          { method: 'POST', body: { muted } }
+        )
+        host.notify({
+          kind: 'success',
+          message: muted
+            ? `${card.job_name} muted — find it under Muted`
+            : `${card.job_name} unmuted`
         })
       } catch (err) {
         host.notify({ kind: 'error', message: String(err?.message || err) })
@@ -542,6 +600,12 @@ function InboxPage({ ctx }) {
     []
   )
 
+  // Both doors land in the Reader; `raw` just opens the newest run without
+  // making the reader pick one from the dot row. Declared AFTER openHistory:
+  // a dependency array is evaluated immediately, so referencing a later const
+  // would throw at render time.
+  const openRaw = useCallback(card => openHistory(card), [openHistory])
+
   if (open) {
     return jsx(Reader, {
       item: open,
@@ -575,7 +639,7 @@ function InboxPage({ ctx }) {
             ? jsx(Badge, { variant: 'destructive', size: 'xs', children: errors })
             : null,
           jsx('span', {
-            className: 'text-[0.6875rem] text-(--ui-text-quaternary)',
+            className: 'text-[0.6875rem] text-(--ui-text-tertiary)',
             children: t('subtitle', cards.length)
           }),
           jsx('span', { className: 'flex-1' }),
@@ -664,7 +728,8 @@ function InboxPage({ ctx }) {
             t,
             onOpenHistory: openHistory,
             onMarkJobRead: markJobRead,
-            onMute: markMuted
+            onMute: markMuted,
+            onRaw: () => openRaw(card)
           })
         )
       })

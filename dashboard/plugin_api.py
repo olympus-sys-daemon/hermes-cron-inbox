@@ -576,8 +576,9 @@ async def feed(
     include_muted: bool = False,
     errors_only: bool = False,
     unread_only: bool = False,
+    muted_only: bool = False,
     q: str = "",
-    body_limit: int = 1800,
+    body_limit: int = 1200,
 ) -> dict[str, Any]:
     """Job-grouped view: one card per job carrying its LATEST run's text.
 
@@ -609,9 +610,17 @@ async def feed(
         latest = runs[0]
         live = [r for r in runs if not r["silent"] and not r["muted"]]
 
-        if not include_muted and latest["muted"]:
+        if muted_only:
+            # The Muted tab is the way back: without it, muting removes a job
+            # from the page with no route to undo it. Checked BEFORE the
+            # silent/live filter below, because muting excludes every run from
+            # `live` - so a fully-muted job would be dropped for having nothing
+            # live to show, and the tab would always be empty.
+            if not any(r["muted"] for r in runs):
+                continue
+        elif not include_muted and latest["muted"]:
             continue
-        if not include_silent and not live:
+        elif not include_silent and not live:
             # Every run of this job was silent: there is nothing to read.
             continue
         if errors_only and not any(r["error"] for r in runs[:50]):
@@ -619,7 +628,9 @@ async def feed(
         if unread_only and not any(r["unread"] for r in live):
             continue
 
-        head = live[0] if live else latest
+        # When every run is muted, `live` is empty by construction: fall back to
+        # the newest run so a Muted card still has a name and a body.
+        head = live[0] if live else next((r for r in runs if not r["silent"]), latest)
 
         if q:
             needle = q.strip().lower()
@@ -789,6 +800,28 @@ async def mark_read(item_id: str, body: ReadBody) -> dict[str, Any]:
     _find_item(item_id)  # 404s a stale id instead of storing state for a ghost
     _STATE.set_read(item_id, body.read)
     return {"ok": True, "id": item_id, "read": body.read}
+
+
+@router.post("/jobs/{profile}/{job_id}/mute")
+async def mute_job(profile: str, job_id: str, body: MuteBody) -> dict[str, Any]:
+    """Mute or unmute EVERY run of one job.
+
+    Mute lives per run in the state database, so muting a single "latest" run
+    would leave a job that reappears the moment an older run becomes newest.
+    The card is a job-level projection, so its mute must be job-level too -
+    otherwise the toggle is a one-way trip that looks like data loss.
+    """
+    if not profile or not job_id:
+        raise HTTPException(status_code=400, detail="profile and job_id are required")
+
+    affected = 0
+    for item in _scan(include_silent=True):
+        if item["profile"] != profile or item["job_id"] != job_id:
+            continue
+        _STATE.set_muted(item["id"], body.muted)
+        affected += 1
+
+    return {"muted": body.muted, "runs": affected}
 
 
 @router.post("/items/{item_id:path}/mute")

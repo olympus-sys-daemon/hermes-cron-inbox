@@ -281,6 +281,34 @@ def test_feed_unread_ignores_silent_runs():
             )
 
 
+def test_muting_a_job_hides_it_but_the_muted_tab_finds_it():
+    """Muting must be reversible: a job that disappears with no way back is data loss.
+
+    Restores state in a finally block - this suite shares one state DB, and a
+    leaked mute makes later tests fail for an unrelated reason.
+    """
+    path = "/api/plugins/hermes-cron-inbox"
+    job = "loud watcher"
+
+    try:
+        muted = client.post(f"{path}/jobs/default/f6b6e7c0539f/mute", json={"muted": True})
+        assert muted.status_code == 200
+        assert muted.json()["runs"] >= 1, "muting affected no runs"
+
+        # Gone from the default feed...
+        names = {c["job_name"] for c in client.get(f"{path}/feed").json()["cards"]}
+        assert job not in names
+
+        # ...but present in the Muted tab, which is the way back.
+        muted_tab = client.get(f"{path}/feed?muted_only=true").json()["cards"]
+        assert job in {c["job_name"] for c in muted_tab}
+    finally:
+        client.post(f"{path}/jobs/default/f6b6e7c0539f/mute", json={"muted": False})
+
+    names = {c["job_name"] for c in client.get(f"{path}/feed").json()["cards"]}
+    assert job in names, "unmuting did not bring the job back"
+
+
 def test_feed_hides_jobs_whose_runs_were_all_silent():
     body = client.get("/api/plugins/hermes-cron-inbox/feed").json()
     names = {c["job_name"] for c in body["cards"]}
