@@ -58,6 +58,11 @@ jobs:
         # missed report when the count stays flat), so they need asserted
         # behaviour rather than a syntax check.
         run: node tests/test_notifier.mjs
+      - name: Scheduled jobs button
+        # Asserts the button exists, is labelled, and targets core's real /cron.
+        # Self-skips when there is no Hermes app to read, as on this runner: the
+        # assertions depend on core's source, not on the plugin alone.
+        run: node tests/test_scheduled_button.mjs
       - name: Click targets
         # Proves the body you see is the run a click opens. A watcher whose last
         # tick was silent used to open a blank reader - the bug this pins.
