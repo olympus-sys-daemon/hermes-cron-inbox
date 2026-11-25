@@ -216,7 +216,10 @@ function CardBody({ body, clamped, expanded, onToggle, onOpen, t }) {
           // `select-text` is explicit: some ancestors in a clickable card set
           // user-select:none, and the report body must remain copyable.
           'cursor-pointer select-text whitespace-pre-wrap break-words rounded-sm',
-          'text-[0.75rem] leading-[1.5] text-(--ui-text-primary)',
+          // Body is SMALLER and one tier dimmer than the title. It used to be the
+          // brightest thing on the card, which is what made the job name read as
+          // a caption over its own report.
+          'text-xs leading-[1.5] text-(--ui-text-secondary)',
           'transition-colors hover:bg-(--ui-row-hover-background)',
           // The clamp is an inline style, not a Tailwind class: arbitrary
           // variants like `line-clamp-[14]` are compiled from CORE source only,
@@ -277,14 +280,25 @@ function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute, onRaw }) {
     ),
     children: [
       // ---- header ----------------------------------------------------------
+      //
+      // The title must dominate the body, and it did NOT before: the body was
+      // 12px at primary (94%) while the title was 13px at secondary (74%), so
+      // the report looked like the heading and the job name like a caption.
+      // Now: bigger type, full-strength colour, semibold, tight tracking, and a
+      // hairline rule under it so the eye separates title from report without
+      // relying on colour at all.
       jsxs('div', {
-        className: 'flex items-center gap-2',
+        className:
+          'flex flex-wrap items-center gap-2 border-b border-(--ui-stroke-secondary) pb-1.5',
         children: [
           jsx('span', {
             className: cn(
-              'truncate text-[0.8125rem]',
-              card.unread ? 'font-semibold text-foreground' : 'font-medium text-(--ui-text-secondary)'
+              'min-w-0 truncate text-sm tracking-tight text-foreground',
+              // Unread is bold AND carries the accent dot, so scanning for new
+              // work never depends on weight alone.
+              card.unread ? 'font-semibold' : 'font-medium'
             ),
+            title: card.job_name,
             children: card.job_name
           }),
           badge,
