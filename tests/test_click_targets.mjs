@@ -102,6 +102,39 @@ for (const card of jobsWithBody) {
   }
 }
 
+// The reader must WIN over the history list. This was a real bug: `if (history)`
+// was checked before `if (open)`, so choosing a run from the list left the list
+// on screen and the click appeared to do nothing.
+const pageSrc = readFileSync(SRC, 'utf8')
+const openAt = pageSrc.indexOf('  if (open) {')
+const historyAt = pageSrc.indexOf('  if (history) {')
+assert.ok(openAt > 0 && historyAt > 0, 'both branches must exist')
+assert.ok(
+  openAt < historyAt,
+  'the reader branch must be checked BEFORE the history branch, or a row click ' +
+    'sets `open` and the list stays on screen'
+)
+
+// The body text must stay selectable: a plain onClick that navigates makes
+// drag-to-copy impossible. The handler must consult the selection.
+assert.match(
+  pageSrc,
+  /getSelection/,
+  'the body click handler must check window.getSelection() so selecting text ' +
+    'does not navigate'
+)
+assert.match(
+  pageSrc,
+  /select-text/,
+  'the report body must set select-text so an ancestor cannot disable selection'
+)
+
+// The raw button is gone.
+assert.ok(
+  !/t\('raw'\)/.test(pageSrc),
+  'the Raw button should have been removed'
+)
+
 // HistoryPanel must be renderable inside a real render (it uses useQuery).
 const histHtml = renderToString(
   React.createElement(mod.HistoryPanel, {

@@ -61,8 +61,7 @@ const LOCALES = {
     errors: 'Errors',
     new: 'New',
     history: 'History',
-    raw: 'Raw',
-    openRaw: 'Click to open the raw document',
+    openFull: 'Click to open this report in full',
     showFull: 'Show full report',
     showLess: 'Show less',
     emptyRun: 'This run reported nothing — a scheduled check that had nothing to say.',
@@ -165,74 +164,86 @@ let ctxRest = () => Promise.reject(new Error('inbox: ctx not bound yet'))
 // history or the untruncated text.
 
 /** A card's body: monospace, preserved line breaks, clamped to a line budget. */
-function CardBody({ body, clamped, expanded, onToggle, onRaw, t }) {
+/**
+ * A card's report text, and the way into the full view.
+ *
+ * Clicking the text opens the run in the reader. That is deliberately NOT a
+ * plain `onClick` on the whole block: a click is also how you start selecting
+ * text, so a naive handler makes the body unselectable - you drag to copy and
+ * get a page transition instead.
+ *
+ * The rule used here: open only when the click did not produce a selection and
+ * did not end one. `getSelection()` is read on mouseup, after the browser has
+ * settled the selection, and an existing non-empty selection means the user was
+ * copying, not navigating.
+ */
+function CardBody({ body, clamped, expanded, onToggle, onOpen, t }) {
+  const [hovered, setHovered] = useState(false)
+
+  const handleClick = useCallback(() => {
+    // Read the selection at click time: a drag-select that ends inside the block
+    // fires click too, and that must not navigate.
+    const selection = typeof window !== 'undefined' ? window.getSelection?.() : null
+    if (selection && String(selection).length > 0) return
+    onOpen()
+  }, [onOpen])
+
   return jsxs('div', {
     className: 'relative',
     children: [
-      // Clicking the text opens the raw document. The card is a reading view;
-      // the original file is one act away, which is what "give me the raw one"
-      // means when you are already looking at the content.
       jsx('div', {
         key: 'text',
         role: 'button',
         tabIndex: 0,
-        onClick: onRaw,
+        onClick: handleClick,
         onKeyDown: e => {
-          if (e.key === 'Enter' || e.key === ' ') {
+          // Keyboard users get Enter/Space; there is no selection to respect,
+          // and Ctrl/Cmd+A then copy still works because the text is real text.
+          if (e.key === 'Enter') {
             e.preventDefault()
-            onRaw()
+            onOpen()
           }
         },
-        title: t('openRaw'),
+        onMouseEnter: () => setHovered(true),
+        onMouseLeave: () => setHovered(false),
+        title: t('openFull'),
         className: cn(
-          'cursor-pointer whitespace-pre-wrap break-words rounded-sm',
-          // Body text at 88% of foreground, not the 74% "secondary" shade: on a
-          // light theme 74% reads as grey-on-grey, and this is the text people
-          // are actually here to read.
+          // `select-text` is explicit: some ancestors in a clickable card set
+          // user-select:none, and the report body must remain copyable.
+          'cursor-pointer select-text whitespace-pre-wrap break-words rounded-sm',
           'text-[0.75rem] leading-[1.5] text-(--ui-text-primary)',
           'transition-colors hover:bg-(--ui-row-hover-background)',
-          // Only clamp when there is more to show; a short report must not get
-          // an expander it does not need.
-          clamped && !expanded ? 'line-clamp-[14]' : ''
+          // The clamp is an inline style, not a Tailwind class: arbitrary
+          // variants like `line-clamp-[14]` are compiled from CORE source only,
+          // so a plugin-invented class silently does nothing. This is a real
+          // scroll container instead, which also keeps the text selectable.
+          clamped && !expanded ? 'overflow-hidden' : ''
         ),
+        style: clamped && !expanded ? { maxHeight: '19em' } : undefined,
         // Runs are plain text with markdown-ish furniture; preserving whitespace
         // keeps the aligned columns of script reports readable.
         children: body
       }),
-      jsxs('div', {
-        key: 'actions',
-        className: 'mt-1 flex items-center gap-3',
-        children: [
-          clamped
-            ? jsxs('button', {
-                key: 'toggle',
-                type: 'button',
-                onClick: onToggle,
-                className: cn(
-                  'flex items-center gap-1 text-[0.6875rem] text-(--ui-text-secondary)',
-                  'transition-colors hover:text-foreground'
-                ),
-                children: [
-                  jsx(Codicon, { name: expanded ? 'chevron-up' : 'chevron-down', size: '0.625rem' }),
-                  jsx('span', { children: expanded ? t('showLess') : t('showFull') })
-                ]
-              })
-            : null,
-          jsx('button', {
-            key: 'raw',
+      clamped
+        ? jsxs('button', {
+            key: 'toggle',
             type: 'button',
-            onClick: onRaw,
+            // The expander must not also navigate: stop the click reaching any
+            // ancestor handler.
+            onClick: event => {
+              event.stopPropagation()
+              onToggle()
+            },
             className: cn(
-              'flex items-center gap-1 text-[0.6875rem] text-(--ui-text-secondary)',
+              'mt-1 flex items-center gap-1 text-[0.6875rem] text-(--ui-text-secondary)',
               'transition-colors hover:text-foreground'
             ),
             children: [
-              jsx(Codicon, { name: 'file-code', size: '0.625rem' }),
-              jsx('span', { children: t('raw') })
+              jsx(Codicon, { name: expanded ? 'chevron-up' : 'chevron-down', size: '0.625rem' }),
+              jsx('span', { children: expanded ? t('showLess') : t('showFull') })
             ]
           })
-        ]
-      })
+        : null
     ]
   })
 }
@@ -261,7 +272,8 @@ function RunDots({ recent, limit = 8, onPick, t }) {
         },
         title: `${fmtTime(run.stamp)}${run.error ? ` · ${t('error')}` : run.silent ? ` · ${t('silent')}` : ''}`,
         className: cn(
-          'h-2 w-2 shrink-0 rounded-full transition-transform hover:scale-150',
+          // `hover:scale-150` is not a generated class either; scale-110 exists.
+          'h-2 w-2 shrink-0 rounded-full transition-transform hover:scale-110',
           run.error
             ? 'bg-destructive'
             : run.silent
@@ -337,7 +349,7 @@ function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute, onRaw, onPickR
             clamped: card.chars > card.body.length || card.truncated,
             expanded,
             onToggle: () => setExpanded(v => !v),
-            onRaw: () => onOpenHistory(card)
+            onOpen: () => onRaw(card)
           })
         : jsx('div', {
             className: 'text-xs italic text-(--ui-text-tertiary)',
@@ -572,14 +584,16 @@ function Reader({ item, t, onBack, onRead, onMute }) {
       jsx(ScrollArea, {
         className: 'min-h-0 flex-1',
         children: jsx('div', {
-          className: 'px-4 pb-8 pt-1',
+          // `select-text` is explicit: the full view is where people copy a
+          // report out, and a clickable ancestor must not take that away.
+          className: 'select-text px-4 pb-8 pt-1',
           children: loading
             ? jsxs('div', {
                 className: 'flex flex-col gap-2',
                 children: [
-                  jsx(Skeleton, { className: 'h-4 w-2/3' }),
+                  jsx(Skeleton, { className: 'h-4 w-1/2' }),
                   jsx(Skeleton, { className: 'h-4 w-full' }),
-                  jsx(Skeleton, { className: 'h-4 w-5/6' })
+                  jsx(Skeleton, { className: 'h-4 w-1/2' })
                 ]
               })
             : body || item.preview
@@ -770,6 +784,27 @@ function InboxPage({ ctx }) {
     setHistory({ profile: card.profile, job_id: card.job_id, job_name: card.job_name })
   }, [])
 
+  if (open) {
+    return jsx(Reader, {
+      item: open,
+      t,
+      // Returns to the history list when that is where this run was chosen
+      // from, so drilling in and back out does not drop the whole list.
+      onBack: () => setOpen(null),
+      onRead: (item, read) => {
+        void ctxRest(`/items/${encodeURIComponent(item.id)}/read`, {
+          method: 'POST',
+          body: { read }
+        }).then(refresh, () => refresh())
+      },
+      onMute: (item, muted) => {
+        void ctxRest(`/items/${encodeURIComponent(item.id)}/mute`, {
+          method: 'POST',
+          body: { muted }
+        }).then(() => setOpen(null), refresh)
+      }
+    })
+  }
   if (history) {
     return jsx(HistoryPanel, {
       job: history,
@@ -794,25 +829,6 @@ function InboxPage({ ctx }) {
     })
   }
 
-  if (open) {
-    return jsx(Reader, {
-      item: open,
-      t,
-      onBack: () => setOpen(null),
-      onRead: (item, read) => {
-        void ctxRest(`/items/${encodeURIComponent(item.id)}/read`, {
-          method: 'POST',
-          body: { read }
-        }).then(refresh, () => refresh())
-      },
-      onMute: (item, muted) => {
-        void ctxRest(`/items/${encodeURIComponent(item.id)}/mute`, {
-          method: 'POST',
-          body: { muted }
-        }).then(() => setOpen(null), refresh)
-      }
-    })
-  }
 
   return jsxs('div', {
     className: 'flex h-full min-h-0 flex-col',
