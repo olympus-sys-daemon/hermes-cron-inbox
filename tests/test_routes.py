@@ -48,7 +48,7 @@ def _load():
 
 api = _load()
 app = FastAPI()
-app.include_router(api.router, prefix="/api/plugins/hermes-inbox")
+app.include_router(api.router, prefix="/api/plugins/hermes-cron-inbox")
 client = TestClient(app)
 
 SILENT = """# Cron Job: quiet watcher
@@ -117,14 +117,14 @@ _seed()
 
 
 def test_health_reports_both_profiles():
-    body = client.get("/api/plugins/hermes-inbox/health").json()
+    body = client.get("/api/plugins/hermes-cron-inbox/health").json()
     assert body["ok"] is True
     assert "default" in body["profiles"]
     assert "planner" in body["profiles"]
 
 
 def test_default_list_hides_silent_runs():
-    body = client.get("/api/plugins/hermes-inbox/items").json()
+    body = client.get("/api/plugins/hermes-cron-inbox/items").json()
     names = {item["job_name"] for item in body["items"]}
     assert "loud watcher" in names
     assert "quiet watcher" not in names
@@ -132,25 +132,25 @@ def test_default_list_hides_silent_runs():
 
 
 def test_everything_scope_includes_silent_runs():
-    body = client.get("/api/plugins/hermes-inbox/items?include_silent=true").json()
+    body = client.get("/api/plugins/hermes-cron-inbox/items?include_silent=true").json()
     names = {item["job_name"] for item in body["items"]}
     assert "quiet watcher" in names
     assert body["all_docs"] == 4
 
 
 def test_agent_documents_expose_the_response_not_the_prompt():
-    body = client.get("/api/plugins/hermes-inbox/items").json()
+    body = client.get("/api/plugins/hermes-cron-inbox/items").json()
     agent = next(item for item in body["items"] if item["job_name"] == "house hunter")
     assert agent["is_script"] is False
     assert "p" * 20 not in agent["preview"]
-    detail = client.get(f"/api/plugins/hermes-inbox/items/{agent['id']}").json()
+    detail = client.get(f"/api/plugins/hermes-cron-inbox/items/{agent['id']}").json()
     assert detail["body"] == RESPONSE
 
 
 def test_item_detail_carries_job_metadata():
-    body = client.get("/api/plugins/hermes-inbox/items").json()
+    body = client.get("/api/plugins/hermes-cron-inbox/items").json()
     item = next(i for i in body["items"] if i["job_name"] == "loud watcher")
-    detail = client.get(f"/api/plugins/hermes-inbox/items/{item['id']}").json()
+    detail = client.get(f"/api/plugins/hermes-cron-inbox/items/{item['id']}").json()
     assert detail["deliver"] == "discord"
     assert detail["schedule"] == "0 * * * *"
     assert detail["profile"] == "default"
@@ -158,49 +158,49 @@ def test_item_detail_carries_job_metadata():
 
 
 def test_read_state_round_trips_and_drives_the_counters():
-    body = client.get("/api/plugins/hermes-inbox/items").json()
+    body = client.get("/api/plugins/hermes-cron-inbox/items").json()
     item = next(i for i in body["items"] if i["job_name"] == "loud watcher")
     assert item["unread"] is True
 
-    before = client.get("/api/plugins/hermes-inbox/summary").json()["unread"]
+    before = client.get("/api/plugins/hermes-cron-inbox/summary").json()["unread"]
     assert client.post(
-        f"/api/plugins/hermes-inbox/items/{item['id']}/read", json={"read": True}
+        f"/api/plugins/hermes-cron-inbox/items/{item['id']}/read", json={"read": True}
     ).json()["read"] is True
 
-    after = client.get("/api/plugins/hermes-inbox/summary").json()["unread"]
+    after = client.get("/api/plugins/hermes-cron-inbox/summary").json()["unread"]
     assert after == before - 1
 
-    listed = client.get("/api/plugins/hermes-inbox/items").json()["items"]
+    listed = client.get("/api/plugins/hermes-cron-inbox/items").json()["items"]
     refreshed = next(i for i in listed if i["id"] == item["id"])
     assert refreshed["read"] is True and refreshed["unread"] is False
 
-    client.post(f"/api/plugins/hermes-inbox/items/{item['id']}/read", json={"read": False})
-    assert client.get("/api/plugins/hermes-inbox/summary").json()["unread"] == before
+    client.post(f"/api/plugins/hermes-cron-inbox/items/{item['id']}/read", json={"read": False})
+    assert client.get("/api/plugins/hermes-cron-inbox/summary").json()["unread"] == before
 
 
 def test_unread_only_filter():
-    client.post("/api/plugins/hermes-inbox/mark-all-read", json={"include_silent": False})
-    body = client.get("/api/plugins/hermes-inbox/items?unread_only=true").json()
+    client.post("/api/plugins/hermes-cron-inbox/mark-all-read", json={"include_silent": False})
+    body = client.get("/api/plugins/hermes-cron-inbox/items?unread_only=true").json()
     assert body["items"] == []
     assert body["unread"] == 0
 
 
 def test_mute_removes_an_item_from_the_default_feed():
-    body = client.get("/api/plugins/hermes-inbox/items").json()
+    body = client.get("/api/plugins/hermes-cron-inbox/items").json()
     item = next(i for i in body["items"] if i["job_name"] == "planner digest")
-    client.post(f"/api/plugins/hermes-inbox/items/{item['id']}/mute", json={"muted": True})
+    client.post(f"/api/plugins/hermes-cron-inbox/items/{item['id']}/mute", json={"muted": True})
 
-    names = {i["job_name"] for i in client.get("/api/plugins/hermes-inbox/items").json()["items"]}
+    names = {i["job_name"] for i in client.get("/api/plugins/hermes-cron-inbox/items").json()["items"]}
     assert "planner digest" not in names
 
-    scope = client.get("/api/plugins/hermes-inbox/items?include_muted=true").json()
+    scope = client.get("/api/plugins/hermes-cron-inbox/items?include_muted=true").json()
     assert "planner digest" in {i["job_name"] for i in scope["items"]}
 
-    client.post(f"/api/plugins/hermes-inbox/items/{item['id']}/mute", json={"muted": False})
+    client.post(f"/api/plugins/hermes-cron-inbox/items/{item['id']}/mute", json={"muted": False})
 
 
 def test_jobs_route_aggregates_per_job():
-    body = client.get("/api/plugins/hermes-inbox/jobs").json()
+    body = client.get("/api/plugins/hermes-cron-inbox/jobs").json()
     jobs = {row["job_name"]: row for row in body["jobs"]}
     assert jobs["quiet watcher"]["silent"] == 1
     assert jobs["loud watcher"]["docs"] == 1
@@ -208,24 +208,24 @@ def test_jobs_route_aggregates_per_job():
 
 
 def test_search_matches_job_name():
-    body = client.get("/api/plugins/hermes-inbox/items?q=planner").json()
+    body = client.get("/api/plugins/hermes-cron-inbox/items?q=planner").json()
     assert [i["job_name"] for i in body["items"]] == ["planner digest"]
 
 
 def test_the_exact_path_the_desktop_half_requests():
     """Regression: the page once handed its params OBJECT to ctx.rest, so it
-    requested /api/plugins/hermes-inbox/[object Object]. This is the URL the
+    requested /api/plugins/hermes-cron-inbox/[object Object]. This is the URL the
     fixed page builds (see the harness in the repo's history); it must serve."""
-    assert client.get("/api/plugins/hermes-inbox/items?limit=300").status_code == 200
+    assert client.get("/api/plugins/hermes-cron-inbox/items?limit=300").status_code == 200
     # And the full filter set the page sends.
-    full = ("/api/plugins/hermes-inbox/items?limit=300&unread_only=false"
+    full = ("/api/plugins/hermes-cron-inbox/items?limit=300&unread_only=false"
             "&errors_only=false&include_silent=false&include_muted=false")
     body = client.get(full).json()
     assert "items" in body and "total" in body
 
 
 def test_config_route_returns_declared_defaults():
-    body = client.get("/api/plugins/hermes-inbox/config").json()
+    body = client.get("/api/plugins/hermes-cron-inbox/config").json()
     assert body["include_silent_by_default"] is False
     assert body["poll_seconds"] == 60
 
@@ -237,16 +237,16 @@ def test_config_route_clamps_and_coerces():
 
 
 def test_unknown_item_404s():
-    assert client.get("/api/plugins/hermes-inbox/items/default|deadbeefdead|2026-01-01_00-00-00").status_code == 404
+    assert client.get("/api/plugins/hermes-cron-inbox/items/default|deadbeefdead|2026-01-01_00-00-00").status_code == 404
 
 
 def test_malformed_item_id_is_rejected():
-    assert client.get("/api/plugins/hermes-inbox/items/nonsense").status_code in (400, 404)
+    assert client.get("/api/plugins/hermes-cron-inbox/items/nonsense").status_code in (400, 404)
 
 
 def test_path_traversal_is_refused():
     resp = client.get(
-        "/api/plugins/hermes-inbox/items/default|f6b6e7c0539f|..%2F..%2F..%2Fetc%2Fpasswd"
+        "/api/plugins/hermes-cron-inbox/items/default|f6b6e7c0539f|..%2F..%2F..%2Fetc%2Fpasswd"
     )
     assert resp.status_code in (400, 404)
 

@@ -1,4 +1,4 @@
-# Hermes Inbox
+# hermes-cron-inbox
 
 An inbox for the cron reports Hermes already writes.
 
@@ -11,7 +11,7 @@ configuration, and no second copy of your data to drift.
 
 | Surface | Result |
 |---|---|
-| Sidebar row | **Inbox** — appears after the desktop half is switched on (see Install) |
+| Sidebar row | **Cron Inbox** — appears after the desktop half is switched on (see Install) |
 | Page `/inbox` | chronological feed of runs across every profile |
 | Status bar chip | unread count, turns destructive on unread failures |
 | ⌘K command | "Open Inbox" |
@@ -42,16 +42,16 @@ reported nothing, and the Everything scope brings it back on demand.
 ## Install
 
 ```bash
-hermes plugins install olympus-sys-daemon/hermes-inbox
+hermes plugins install olympus-sys-daemon/hermes-cron-inbox
 ```
 
 Then **two switches**, both required. This bites everyone once: after step 1 the plugin is
 installed and enabled, the backend routes answer, and *the sidebar row still does not appear* —
 because a package's desktop half ships deliberately off.
 
-1. **Agent half** — `hermes plugins enable hermes-inbox` (or add it to `plugins.enabled`).
+1. **Agent half** — `hermes plugins enable hermes-cron-inbox` (or add it to `plugins.enabled`).
    Without this the routes 404 and the page shows its "inbox unavailable" state.
-2. **Desktop half** — open **Capabilities → Plugins**, find **Inbox**, and switch it on
+2. **Desktop half** — open **Capabilities → Plugins**, find **Cron Inbox**, and switch it on
    (the row shows a Desktop/GUI half with a switch; Settings → Plugins works too, by package
    name). The page, sidebar row and status chip register only once this is on.
 
@@ -61,7 +61,7 @@ every package's UI half is opt-in, matching the agent half's `plugins.enabled` g
 explicit toggle is stored per-app in `localStorage` and wins from then on.
 
 Already ticked and still nothing? Then it is a load error, not the switch: the app shows a
-"Plugin 'hermes-inbox' failed to load" toast and the plugin goes red in Capabilities → Plugins.
+"Plugin 'hermes-cron-inbox' failed to load" toast and the plugin goes red in Capabilities → Plugins.
 ⌘K → **Reload desktop plugins** re-reads the folder.
 
 Enable the plugin in every profile you want represented — the plugin reads the cron output of
@@ -124,7 +124,7 @@ prompt noise.
 ## Data and storage
 
 The Inbox stores **only** read/mute state, keyed by `profile|job_id|timestamp`, in
-`<HERMES_HOME>/plugin-data/hermes-inbox/inbox.db`. Bodies are re-read from disk on demand and
+`<HERMES_HOME>/plugin-data/hermes-cron-inbox/inbox.db`. Bodies are re-read from disk on demand and
 memoised on `(mtime, size)`, so a 170 KB archive is parsed once, not on every render.
 
 Cron keeps the newest 50 documents per job (`cron.output_retention`). This is an inbox, not an

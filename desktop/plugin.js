@@ -31,7 +31,7 @@ import {
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-const ID = 'hermes-inbox'
+const ID = 'hermes-cron-inbox'
 const PATH = '/inbox'
 const CHANGED_EVENT = 'cron.changed'
 
@@ -545,7 +545,7 @@ function UnreadChip() {
 
 export default {
   id: ID,
-  name: 'Inbox',
+  name: 'hermes-cron-inbox',
   register(ctx) {
     ctxRest = (path, opts) => ctx.rest(path, opts)
 
@@ -559,7 +559,7 @@ export default {
     ctx.register({
       id: 'nav',
       area: SIDEBAR_NAV_AREA,
-      data: { path: PATH, label: 'Inbox', codicon: 'inbox' }
+      data: { path: PATH, label: 'Cron Inbox', codicon: 'inbox' }
     })
 
     ctx.register({
@@ -574,7 +574,7 @@ export default {
       area: PALETTE_AREA,
       data: {
         id: `${ID}.open`,
-        label: 'Open Inbox',
+        label: 'Open Cron Inbox',
         keywords: ['inbox', 'cron', 'runs', 'reports', 'watchers'],
         run: () => host.navigate(PATH)
       }

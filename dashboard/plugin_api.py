@@ -73,7 +73,7 @@ def _hermes_root() -> Path:
 
 
 def _state_dir() -> Path:
-    path = _hermes_root() / "plugin-data" / "hermes-inbox"
+    path = _hermes_root() / "plugin-data" / "hermes-cron-inbox"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -432,7 +432,7 @@ async def health() -> dict[str, Any]:
 
 
 def _settings() -> dict[str, Any]:
-    """This plugin's own ``plugins.entries.hermes-inbox.settings`` values.
+    """This plugin's own ``plugins.entries.hermes-cron-inbox.settings`` values.
 
     The desktop half cannot call ``ctx.get_config`` (that is an agent-side
     facade), so it reads them here. Defaults are declared in ``plugin.yaml``'s
@@ -447,7 +447,7 @@ def _settings() -> dict[str, Any]:
     except Exception:
         return defaults
     try:
-        entry = ((config.get("plugins") or {}).get("entries") or {}).get("hermes-inbox") or {}
+        entry = ((config.get("plugins") or {}).get("entries") or {}).get("hermes-cron-inbox") or {}
         settings = entry.get("settings") or {}
     except AttributeError:
         return defaults

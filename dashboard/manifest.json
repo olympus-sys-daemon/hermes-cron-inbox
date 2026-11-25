@@ -1,6 +1,6 @@
 {
-  "name": "hermes-inbox",
-  "label": "Inbox",
+  "name": "hermes-cron-inbox",
+  "label": "hermes-cron-inbox",
   "description": "An inbox for the cron run documents Hermes already writes. Lists every scheduled job's output across all profiles and hides the runs that had nothing to report.",
   "version": "1.0.0",
   "api": "plugin_api.py"

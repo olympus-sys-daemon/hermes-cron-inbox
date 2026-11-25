@@ -1,10 +1,10 @@
-name: hermes-inbox
-label: Inbox
+name: hermes-cron-inbox
+label: hermes-cron-inbox
 kind: standalone
 version: 1.0.0
 author: olympus-sys-daemon
 license: MIT
-homepage: https://github.com/olympus-sys-daemon/hermes-inbox
+homepage: https://github.com/olympus-sys-daemon/hermes-cron-inbox
 description: >
   An inbox for the cron run documents Hermes already writes. Adds an Inbox
   page to the desktop app that lists every scheduled job's output across all
