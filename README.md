@@ -36,8 +36,26 @@ Behaviour worth knowing:
   stable across restarts (persisted in plugin storage, capped at 500).
 - **Silent and muted runs never announce** — that would defeat the point of the filter.
 - **One notification per batch**, not per item: "3 new cron reports / <job> and 2 more".
-- **Only fires while you are away from Hermes.** The host suppresses it when the window is focused;
-  the in-app toast covers that case, and the chip always shows the count.
+
+### It also fires while you are looking
+
+`ctx.os.notify` is gated on being away from Hermes — the host drops it while the window is focused,
+because a system alert is redundant next to an app you are already reading. That gate is not
+configurable and a plugin cannot bypass it.
+
+So the same event raises **both** doors:
+
+| You are | You get |
+|---|---|
+| Looking at Hermes | an in-app toast, with an **Open Inbox** button |
+| Away / minimised | an OS notification, click to open the Inbox |
+
+This is core's own recommended split (`os.notify` for away, `host.notify` for foreground), and it is
+not double-notification: whichever door is shut is the one that would have been noise. The toast
+turns **warning** rather than neutral when the arriving report is an error.
+
+One thing to know: the toast is visible but transient (it auto-dismisses), so if you are looking at
+a different part of the app it can still pass you by. The statusbar chip is the durable count.
 
 Two things must both be true for it to work:
 

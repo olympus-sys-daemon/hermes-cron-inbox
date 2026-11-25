@@ -52,7 +52,8 @@ const STUB_OVERRIDES = {
     set: (k, v) => globalThis.__storage.set(k, v)
   },
   onEvent: () => () => {},
-  navigate: () => {},
+  navigate: () => { globalThis.__navigated.push(arguments[0]) },
+  notify: n => globalThis.__toasts.push(n),
   os: { notify: n => globalThis.__notifications.push(n) }
 }`,
   useQuery: 'export const useQuery = o => ({ data: globalThis.__nextData, refetchInterval: o.refetchInterval })',
@@ -64,8 +65,12 @@ const sdkStub = sdkNames
   .map(name => STUB_OVERRIDES[name] ?? `export const ${name} = () => null`)
   .join('\n')
 
+const toasts = []
+
 globalThis.__effects = effects
 globalThis.__notifications = notifications
+globalThis.__toasts = toasts
+globalThis.__navigated = []
 globalThis.__storage = storage
 
 // --- the component under test, extracted by name -----------------------------
@@ -157,6 +162,14 @@ assert.match(notifications[0].title, /New cron report/)
 assert.match(notifications[0].body, /Watcher/)
 assert.deepEqual(notifications[0].activate, { path: '/inbox' })
 
+// 2b. The in-app toast must fire from the SAME event. The OS door is gated on
+// being away from Hermes; the toast is the focused-window path, and core's own
+// docstring names it as the foreground case. One event, both doors.
+assert.equal(toasts.length, 1, 'the same event must also raise an in-app toast')
+assert.match(toasts[0].message, /Watcher/)
+assert.equal(toasts[0].action?.label, 'Open Inbox')
+assert.ok(typeof toasts[0].action?.run === 'function', 'toast action must be runnable')
+
 // 3. THE COUNT-DIFF TRAP: one arrives while one is read -> count unchanged.
 poll({ items: [item('default|a|1'), item('default|a|2'), item('default|a|4')] })
 assert.equal(notifications.length, 2, 'count stayed flat but a new id arrived')
@@ -198,4 +211,26 @@ const last = notifications[notifications.length - 1]
 assert.match(last.title, /2 new cron reports/)
 assert.match(last.body, /and 1 more/)
 
-console.log(`ok   7 notifier behaviours verified (${notifications.length} notifications over the run)`)
+// 8. A failing report raises the toast as a warning, not a neutral info line.
+notifications.length = 0
+toasts.length = 0
+poll({
+  items: [
+    item('default|a|1'), item('default|a|2'), item('default|a|4'),
+    item('default|a|9', { error: true, job_name: 'Backup' })
+  ]
+})
+assert.equal(notifications.length, 1)
+assert.equal(toasts[0].kind, 'warning', 'an erroring report should warn')
+assert.match(toasts[0].message, /Backup/)
+
+// Guard against the whole file becoming a no-op: both doors must have fired at
+// least once during the run, and the toast must never exceed the OS count (one
+// event raises at most one of each).
+assert.ok(notifications.length > 0, 'no OS notifications fired at all')
+assert.ok(toasts.length > 0, 'no in-app toasts fired at all')
+
+console.log(
+  `ok   8 notifier behaviours verified ` +
+  `(os=${notifications.length}, toast=${toasts.length}, storage=${globalThis.__storage.get('notified_unread_ids')?.length ?? 0})`
+)

@@ -659,10 +659,24 @@ function CronNotifier() {
     for (const item of fresh) known.add(item.id)
     saveNotifiedIds([...known])
 
-    host.os.notify({
-      title: fresh.length === 1 ? 'New cron report' : `${fresh.length} new cron reports`,
-      body: summarise(fresh),
-      activate: { path: PATH }
+    const title = fresh.length === 1 ? 'New cron report' : `${fresh.length} new cron reports`
+    const body = summarise(fresh)
+
+    // Two doors, because the OS door is gated on being away:
+    //   host.os.notify -> Electron/browser notification, but the host drops it
+    //     while the window is focused (it would be redundant next to the app).
+    //   host.notify    -> the in-app toast, which has no focus gate.
+    // Calling both is what core's own docstring recommends, and it means a
+    // report is surfaced whether or not you happen to be looking. It is not
+    // double-notification: whichever door is shut is the one that does not
+    // need to fire.
+    host.os.notify({ title, body, activate: { path: PATH } })
+
+    host.notify({
+      kind: fresh.some(item => item.error) ? 'warning' : 'info',
+      title,
+      message: body,
+      action: { label: 'Open Inbox', run: () => host.navigate(PATH) }
     })
   }, [query.data])
 
