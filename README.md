@@ -32,7 +32,6 @@ What a card shows:
 - the job name, its schedule, and how many runs it has
 - **the report itself**, monospace and line-preserved, clamped at ~14 lines with "Show full report"
   when there is more (bodies run from a few hundred bytes to ~250 KB)
-- a row of **run dots** — one per recent run, red for a failure, filled for unread, hollow for silent
 - `N unread` / `N failed` only when non-zero, so a healthy job's footer stays quiet
 - actions (mark read, history, mute) that appear on hover rather than at rest
 

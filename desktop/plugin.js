@@ -164,7 +164,7 @@ let ctxRest = () => Promise.reject(new Error('inbox: ctx not bound yet'))
 // row, remember it, go back, open the next.
 //
 // This is the other shape. One card per JOB, showing its newest reported run in
-// full (up to a budget), with the counts and the recent-run dots on the header.
+// full (up to a budget), with the counts on the header.
 // Reading the page is the same act as reading the reports - a click is only for
 // history or the untruncated text.
 
@@ -253,46 +253,8 @@ function CardBody({ body, clamped, expanded, onToggle, onOpen, t }) {
   })
 }
 
-/** The little run-history dots: one per recent run, coloured by outcome. */
-/**
- * Run history at a glance, and the way to open any one of them.
- *
- * These were decoration: you could see six runs existed but open none but the
- * newest. They are buttons now, and each carries its own outcome, because a
- * silent run is a legitimate click target that lands on an empty reader.
- */
-function RunDots({ recent, limit = 8, onPick, t }) {
-  const shown = recent.slice(0, limit)
-  if (!shown.length) return null
 
-  return jsx('span', {
-    className: 'flex items-center gap-1',
-    children: shown.map(run =>
-      jsx('button', {
-        key: run.id,
-        type: 'button',
-        onClick: event => {
-          event.stopPropagation()
-          onPick(run)
-        },
-        title: `${fmtTime(run.stamp)}${run.error ? ` · ${t('error')}` : run.silent ? ` · ${t('silent')}` : ''}`,
-        className: cn(
-          // `hover:scale-150` is not a generated class either; scale-110 exists.
-          'h-2 w-2 shrink-0 rounded-full transition-transform hover:scale-110',
-          run.error
-            ? 'bg-destructive'
-            : run.silent
-              ? 'bg-(--ui-stroke-tertiary)'
-              : run.unread
-                ? 'bg-(--ui-accent)'
-                : 'bg-(--ui-text-tertiary)/60'
-        )
-      })
-    )
-  })
-}
-
-function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute, onRaw, onPickRun }) {
+function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute, onRaw }) {
   const [expanded, setExpanded] = useState(false)
 
   const badge = card.error
@@ -333,11 +295,6 @@ function JobCard({ card, t, onOpenHistory, onMarkJobRead, onMute, onRaw, onPickR
             ? jsx(Badge, { variant: 'outline', size: 'xs', children: card.profile })
             : null,
           jsx('span', { className: 'flex-1' }),
-          jsx(RunDots, {
-            recent: card.recent,
-            t,
-            onPick: run => onPickRun(card, run.id)
-          }),
           jsx('span', {
             className: 'shrink-0 text-[0.6875rem] tabular-nums text-(--ui-text-tertiary)',
             title: fmtTime(card.stamp),
@@ -951,8 +908,7 @@ function InboxPage({ ctx }) {
             onOpenHistory: openHistory,
             onMarkJobRead: markJobRead,
             onMute: markMuted,
-            onRaw: () => openRaw(card),
-            onPickRun: openRun
+            onRaw: () => openRaw(card)
           })
         )
       })
