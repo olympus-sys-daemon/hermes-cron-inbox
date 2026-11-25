@@ -77,14 +77,9 @@ jobs:
             exit 0
           fi
           node tests/test_click_targets.mjs
-      - name: Dashboard renders with real data
-        # Proves the cards render their body text: the whole redesign is that
-        # reading needs no click, and a shallow render cannot see that. Skips
-        # when the machine has no cron corpus to read.
-        run: |
-          if [ -z "$(find "${HERMES_HOME:-$HOME/.hermes}"/cron/output -name '*.md' 2>/dev/null | head -1)" ] \
-             && [ -z "$(find "${HERMES_HOME:-$HOME/.hermes}"/profiles/*/cron/output -name '*.md' 2>/dev/null | head -1)" ]; then
-            echo "no cron corpus on this runner - skipping the render test"
-            exit 0
-          fi
-          node tests/test_render.mjs
+      - name: Dashboard renders under real React
+        # Real react-dom, not stubs: a stub never invokes children and cannot
+        # throw on a hook-order error, so only this catches a page that crashes at
+        # runtime while every stub-based render passes. Self-skips without a
+        # Hermes app or cron corpus.
+        run: node tests/test_real_render.mjs

@@ -225,6 +225,8 @@ All routes mount under `/api/plugins/hermes-cron-inbox/`.
 | `GET` | `/items/{id}` | one run with its full body and source path |
 | `POST` | `/items/{id}/read` | `{read: bool}` |
 | `POST` | `/items/{id}/mute` | `{muted: bool}` |
+| `POST` | `/jobs/{profile}/{job_id}/read` | mark every reported run of a job read — job-level, because a card only carries the newest six runs |
+| `POST` | `/jobs/{profile}/{job_id}/mute` | mute/unmute every run of a job (same reason) |
 | `POST` | `/mark-all-read` | `{profile?, include_silent?}` |
 | `GET` | `/summary` | counters for the chip |
 | `GET` | `/jobs` | per-job aggregation (docs, unread, errors, silent) |
