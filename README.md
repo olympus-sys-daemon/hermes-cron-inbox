@@ -59,6 +59,20 @@ Behaviour worth knowing:
 - **Silent and muted runs never announce** — that would defeat the point of the filter.
 - **One notification per batch**, not per item: "3 new cron reports / <job> and 2 more".
 
+### Turning them off
+
+The bell in the page header is the switch, and it is **per device** — stored in that client's own
+storage, not in plugin settings. That is deliberate: notification permission belongs to a browser or
+an OS, so a shared setting would silence your PC when you muted your laptop.
+
+Off means *do not interrupt me*, not *forget what happened*. The seen-set keeps being written while
+notifications are off, so turning them back on does not dump every report that arrived in the
+meantime; the next genuinely new report fires normally.
+
+The switch states itself three ways — `aria-pressed`, a label that changes between "Notifications on"
+and "Notifications off", and a bell vs bell-slash icon, dimmed when off. All three are asserted in the
+real-render test, because a switch that looks identical in both states is worse than no switch.
+
 ### It runs in every UI mode
 
 The watcher starts from the plugin's `register()` — **not** from a rendered component. That is not a
