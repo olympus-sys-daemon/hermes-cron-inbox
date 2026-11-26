@@ -214,12 +214,44 @@ restThrows = false
 await tick([item('default|a|1'), item('default|a|11')])
 assert.equal(notifications.length, baseline + 1, 'a failed poll must not stop later ticks')
 
+// 10. Notifications OFF: neither door fires, but seen-tracking continues.
+//     The second half is the part that matters - if "off" also stopped the
+//     bookkeeping, turning it back on would dump every gap-time report at once.
+intervals = []
+listeners = []
+timeouts = []
+ctx = makeCtx()
+mod.default.register(ctx)
+await tick([item('default|a|1')])            // prime
+storage.set('notifications_enabled', false)
+const osBefore = notifications.length
+const toastBefore = toasts.length
+await tick([item('default|a|1'), item('default|a|20')])
+assert.equal(notifications.length, osBefore, 'notifications off must not raise an OS notification')
+assert.equal(toasts.length, toastBefore, 'notifications off must not raise a toast')
+assert.ok(
+  (storage.get('notified_unread_ids') ?? []).includes('default|a|20'),
+  'notifications off must still record seen ids, or re-enabling replays them'
+)
+
+// 11. Turning it back ON must not replay what arrived while it was off.
+const osBefore2 = notifications.length
+await tick([item('default|a|1'), item('default|a|20')])
+assert.equal(
+  notifications.length, osBefore2,
+  're-enabling must not announce reports that arrived while notifications were off'
+)
+// ...but a genuinely new report still does.
+storage.set('notifications_enabled', true)
+await tick([item('default|a|1'), item('default|a|20'), item('default|a|21')])
+assert.equal(notifications.length, osBefore2 + 1, 're-enabled notifications must fire for new reports')
+
 // Guard against the file becoming a no-op.
 assert.ok(restCalls > 0, 'the watcher never called rest')
 assert.ok(notifications.length > 0, 'no OS notifications fired at all')
 assert.ok(toasts.length > 0, 'no in-app toasts fired at all')
 
 console.log(
-  `ok   9 watcher behaviours verified ` +
+  `ok   11 watcher behaviours verified ` +
   `(os=${notifications.length}, toast=${toasts.length}, rest=${restCalls}, stored=${storage.get('notified_unread_ids')?.length ?? 0})`
 )

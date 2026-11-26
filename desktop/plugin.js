@@ -83,6 +83,10 @@ const LOCALES = {
       'nothing is broken on disk.',
     markAll: 'Mark all read',
     scheduledJobs: 'Scheduled jobs',
+    notifyOn: 'Notifications on',
+    notifyOff: 'Notifications off',
+    notifyOnHint: 'New cron reports raise a system notification when the window is in the background, and a toast when it is focused.',
+    notifyOffHint: 'No notifications from the Inbox on this device. Reports still arrive and still count as unread - only the interruption stops.',
     openScheduled: 'Open the Scheduled jobs page',
     markedAll: n => (n === 1 ? '1 run marked read' : `${n} runs marked read`),
     markRead: 'Mark read',
@@ -590,6 +594,7 @@ function Reader({ item, t, onBack, onRead, onMute }) {
 
 function InboxPage({ ctx }) {
   const t = useLocale()
+  const [notifyEnabled, setNotifyEnabled] = useNotifyEnabled()
   const queryClient = useQueryClient()
   const settings = useQuery({
     queryKey: [ID, 'config'],
@@ -812,6 +817,26 @@ function InboxPage({ ctx }) {
             children: t('subtitle', cards.length)
           }),
           jsx('span', { className: 'flex-1' }),
+          // The bell is the switch for THIS device. Its pressed state carries the
+          // meaning (aria-pressed), and the icon changes with it, so the state is
+          // readable at a glance and to a screen reader - a bare bell that looks
+          // identical either way is the classic silent-state control.
+          jsx(Button, {
+            variant: 'ghost',
+            size: 'sm',
+            onClick: () => setNotifyEnabled(!notifyEnabled),
+            title: notifyEnabled ? t('notifyOnHint') : t('notifyOffHint'),
+            'aria-pressed': notifyEnabled,
+            'aria-label': notifyEnabled ? t('notifyOn') : t('notifyOff'),
+            className: cn('gap-1', !notifyEnabled && 'opacity-60'),
+            children: [
+              jsx(Codicon, {
+                name: notifyEnabled ? 'bell' : 'bell-slash',
+                size: '0.75rem'
+              }),
+              t(notifyEnabled ? 'notifyOn' : 'notifyOff')
+            ]
+          }),
           // The Scheduled jobs page is a sidebar row only in ADVANCED mode
           // (`tier: 'advanced'` in the sidebar's SIDEBAR_NAV), so in simple mode
           // there is no way to reach it at all. The route itself is not gated -
@@ -1007,6 +1032,50 @@ function UnreadChip() {
 const NOTIFY_BODY_MAX = 120
 const NOTIFY_STORE_KEY = 'notified_unread_ids'
 
+// Whether this CLIENT raises notifications. Deliberately client-side storage,
+// not plugin settings: the OS/browser notification permission is per device and
+// per origin, so a server-side switch would silence one machine when you turned
+// it off on another. Default is ON - the feature is why the plugin exists.
+const NOTIFY_PREF_KEY = 'notifications_enabled'
+const notifySubscribers = new Set()
+
+function loadNotifyEnabled() {
+  try {
+    const raw = host.storage.get(NOTIFY_PREF_KEY, true)
+    return raw !== false
+  } catch {
+    return true
+  }
+}
+
+function saveNotifyEnabled(enabled) {
+  try {
+    host.storage.set(NOTIFY_PREF_KEY, !!enabled)
+  } catch {
+    /* best-effort, like every other storage write here */
+  }
+  // storage is not reactive; tell the toggle (and anything else) to re-read.
+  for (const fn of notifySubscribers) {
+    try {
+      fn(enabled)
+    } catch {
+      /* a bad subscriber must not break the write */
+    }
+  }
+}
+
+function useNotifyEnabled() {
+  const [enabled, setEnabled] = useState(loadNotifyEnabled)
+  useEffect(() => {
+    const fn = next => setEnabled(next)
+    notifySubscribers.add(fn)
+    // Another tab/origin may have changed it; re-read on subscribe.
+    setEnabled(loadNotifyEnabled())
+    return () => notifySubscribers.delete(fn)
+  }, [])
+  return [enabled, saveNotifyEnabled]
+}
+
 function loadNotifiedIds() {
   try {
     const raw = host.storage.get(NOTIFY_STORE_KEY, [])
@@ -1096,6 +1165,11 @@ function startNotifier(ctx) {
 
     for (const item of fresh) seen.add(item.id)
     saveNotifiedIds([...seen])
+
+    // Seen-tracking runs even when notifications are off, and that is the point:
+    // turning the switch back on must not dump every gap-time report as a burst.
+    // Off means "do not interrupt me", not "forget what happened".
+    if (!loadNotifyEnabled()) return
 
     const title = fresh.length === 1 ? 'New cron report' : `${fresh.length} new cron reports`
     const body = summarise(fresh)

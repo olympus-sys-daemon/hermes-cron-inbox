@@ -438,6 +438,64 @@ def test_marking_a_job_read_covers_runs_beyond_the_first_six():
     )
 
 
+def test_every_card_can_resolve_the_run_its_body_came_from():
+    """`latest_id` must appear in `recent`, or the body click has no target.
+
+    The card's text comes from the newest REPORTED run, while `recent` was the
+    newest six runs of ANY kind. On a watcher that is mostly silent those sets do
+    not intersect: the card shows text and clicking it falls back to a silent
+    run, reopening the empty-reader bug.
+
+    Needs a job with MORE THAN SIX newer silent runs above its last report - with
+    a small fixture `runs[:6]` never truncates and the assertion cannot fail, so
+    the seed below builds that shape explicitly.
+    """
+    path = "/api/plugins/hermes-cron-inbox"
+
+    # An ISOLATED root, not the shared fixture: other tests assert exact document
+    # counts, so adding files to _FAKE_ROOT would break them for reasons that
+    # have nothing to do with this one. Point the module at a private tree.
+    isolated = Path(tempfile.mkdtemp(prefix="inbox-recent-"))
+    saved = api._hermes_root
+    api._hermes_root = lambda: isolated
+    try:
+        _run_recent_seed_check(isolated)
+    finally:
+        api._hermes_root = saved
+
+
+def _run_recent_seed_check(isolated):
+    path = "/api/plugins/hermes-cron-inbox"
+    seed = isolated / "cron" / "output" / "c0ffee00c0de"
+    seed.mkdir(parents=True, exist_ok=True)
+    # One old REPORTED run, then eight newer silent ones: the shown run is the
+    # oldest of nine and can only be reached if `recent` includes it explicitly.
+    (seed / "2026-11-01_00-00-00.md").write_text(
+        VISIBLE.replace("f6b6e7c0539f", "c0ffee00c0de").replace("loud watcher", "mostly silent")
+    )
+    for day in range(2, 10):
+        (seed / f"2026-11-{day:02d}_00-00-00.md").write_text(
+            SILENT.replace("4cfdc1a12a0a", "c0ffee00c0de")
+        )
+    import json
+
+    jobs_file = isolated / "cron" / "jobs.json"
+    jobs_file.write_text(json.dumps({"jobs": [{
+        "id": "c0ffee00c0de", "name": "mostly silent", "deliver": "discord",
+        "enabled": True, "schedule_display": "0 * * * *",
+    }]}))
+
+    cards = client.get(f"{path}/feed").json()["cards"]
+    target = [c for c in cards if c["job_id"] == "c0ffee00c0de"]
+    assert target, "the mostly-silent job did not produce a card"
+    card = target[0]
+    assert card["body"], "the mostly-silent card lost its text"
+    assert any(r["id"] == card["latest_id"] for r in card["recent"]), (
+        "the run the body came from is absent from `recent`, so the body click "
+        "cannot open it"
+    )
+
+
 def test_unknown_item_404s():
     assert client.get("/api/plugins/hermes-cron-inbox/items/default|deadbeefdead|2026-01-01_00-00-00").status_code == 404
 

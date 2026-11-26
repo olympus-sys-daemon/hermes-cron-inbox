@@ -692,6 +692,12 @@ async def feed(
             "body": body[:body_limit],
             "truncated": len(body) > body_limit,
             "chars": len(body),
+            # `latest_id` MUST be in here. The body above comes from `shown`,
+            # which for a mostly-silent watcher is far older than the newest six
+            # runs - so a plain `runs[:6]` produced a card whose text no entry in
+            # `recent` matched, and the body click fell back to the newest run of
+            # ANY kind (silent), i.e. the empty-reader bug again. Newest six plus
+            # the shown run, de-duplicated, keeps the click target resolvable.
             "recent": [
                 {
                     "id": r["id"],
@@ -702,7 +708,7 @@ async def feed(
                     "muted": r["muted"],
                     "preview": r["preview"][:160],
                 }
-                for r in runs[:6]
+                for r in ([shown] + [r for r in runs[:6] if r["id"] != shown["id"]])
             ],
         })
 
