@@ -158,6 +158,18 @@ function qs(params) {
 // functions out of the component tree.
 let ctxRest = () => Promise.reject(new Error('inbox: ctx not bound yet'))
 
+// Plugin-scoped persistence lives on `ctx.storage`, NOT on `host` - `host` is the
+// SDK-wide object and carries `state` only. `host.storage` is undefined, so every
+// read threw and every write vanished into a swallowed catch; the notification
+// switch could never stay off, and the seen-id set never persisted either. Bind
+// the real one in register() and keep the same "not bound yet" shape as ctxRest.
+const NULL_STORAGE = {
+  get: (_key, fallback) => fallback,
+  set: () => {},
+  remove: () => {}
+}
+let ctxStorage = NULL_STORAGE
+
 // ---------------------------------------------------------------------------
 // Dashboard: one card per job, carrying the actual message
 // ---------------------------------------------------------------------------
@@ -1041,8 +1053,10 @@ const notifySubscribers = new Set()
 
 function loadNotifyEnabled() {
   try {
-    const raw = host.storage.get(NOTIFY_PREF_KEY, true)
-    return raw !== false
+    const raw = ctxStorage.get(NOTIFY_PREF_KEY, true)
+    // Only a literal false (or a stored "false" from an older shape) turns it
+    // off; anything unreadable falls back to ON, which is the documented default.
+    return raw !== false && raw !== 'false'
   } catch {
     return true
   }
@@ -1050,7 +1064,7 @@ function loadNotifyEnabled() {
 
 function saveNotifyEnabled(enabled) {
   try {
-    host.storage.set(NOTIFY_PREF_KEY, !!enabled)
+    ctxStorage.set(NOTIFY_PREF_KEY, !!enabled)
   } catch {
     /* best-effort, like every other storage write here */
   }
@@ -1078,7 +1092,7 @@ function useNotifyEnabled() {
 
 function loadNotifiedIds() {
   try {
-    const raw = host.storage.get(NOTIFY_STORE_KEY, [])
+    const raw = ctxStorage.get(NOTIFY_STORE_KEY, [])
     return Array.isArray(raw) ? raw.filter(id => typeof id === 'string') : []
   } catch {
     return []
@@ -1089,7 +1103,7 @@ function saveNotifiedIds(ids) {
   try {
     // Bounded: only the newest matter for de-duplication and this must never
     // grow without limit.
-    host.storage.set(NOTIFY_STORE_KEY, ids.slice(0, 500))
+    ctxStorage.set(NOTIFY_STORE_KEY, ids.slice(0, 500))
   } catch {
     /* storage is best-effort; never break the watcher over it */
   }
@@ -1215,6 +1229,9 @@ export default {
   name: 'hermes-cron-inbox',
   register(ctx) {
     ctxRest = (path, opts) => ctx.rest(path, opts)
+    // Feature-detect: an older host without ctx.storage must degrade to the
+    // no-op store rather than throw at registration.
+    ctxStorage = ctx.storage ?? NULL_STORAGE
 
     // Headless: starts here, not in a component, so it runs in every UI mode.
     startNotifier(ctx)

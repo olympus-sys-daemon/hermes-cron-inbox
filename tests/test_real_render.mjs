@@ -55,13 +55,9 @@ const overrides = {
   }`,
   useQueryClient: `export const useQueryClient = () => ({ invalidateQueries: () => {} })`,
   cn: `export const cn = (...a) => a.filter(Boolean).join(' ')`,
+  // NOTE: `host` carries NO storage in the real SDK - it has `state` only.
+  // Persistence is on `ctx.storage`, so the stub must not invent it.
   host: `export const host = {
-    storage: {
-      get: (k, d) => (k === 'notifications_enabled'
-        ? globalThis.__NOTIFY_PREF ?? d
-        : d),
-      set: () => {}
-    },
     notify: () => {},
     navigate: () => {},
     onEvent: () => () => {}
@@ -100,6 +96,22 @@ const { renderToString } = await import(
 const mod = await import(pathToFileURL(target).href)
 
 globalThis.__NOTIFY_PREF = true
+// register() binds ctx.storage into the module; without it the module's storage
+// stays the no-op fallback and the switch always reads its default.
+const appCtx = {
+  rest: async () => feed,
+  storage: {
+    get: (k, d) => (k === 'notifications_enabled' ? globalThis.__NOTIFY_PREF ?? d : d),
+    set: () => {},
+    remove: () => {}
+  },
+  register: () => {},
+  onEvent: () => () => {},
+  setInterval: () => () => {},
+  setTimeout: () => () => {}
+}
+mod.default.register(appCtx)
+
 let html
 let htmlOff
 try {

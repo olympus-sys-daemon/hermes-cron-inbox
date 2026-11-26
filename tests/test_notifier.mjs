@@ -34,11 +34,11 @@ const sdkNames = sdkImport[1]
   .filter(Boolean)
 
 const STUB_OVERRIDES = {
+  // `host` carries NO storage. The real SDK's host object has `state` only;
+  // persistence is on `ctx.storage`. A stub that invents host.storage hides a
+  // plugin that calls it - which is exactly how the notification switch shipped
+  // unable to stay off.
   host: `export const host = {
-  storage: {
-    get: (k, d) => globalThis.__storage.has(k) ? globalThis.__storage.get(k) : d,
-    set: (k, v) => globalThis.__storage.set(k, v)
-  },
   notify: n => globalThis.__toasts.push(n),
   navigate: p => globalThis.__navigated.push(p),
   onEvent: () => () => {}
@@ -109,7 +109,13 @@ function makeCtx() {
       return () => {}
     },
     register: () => {},
-    onDispose: () => {}
+    onDispose: () => {},
+    // Plugin-scoped persistence, as the real ctx provides it.
+    storage: {
+      get: (k, d) => (globalThis.__storage.has(k) ? globalThis.__storage.get(k) : d),
+      set: (k, v) => globalThis.__storage.set(k, v),
+      remove: k => globalThis.__storage.delete(k)
+    }
   }
 }
 
@@ -246,12 +252,44 @@ storage.set('notifications_enabled', true)
 await tick([item('default|a|1'), item('default|a|20'), item('default|a|21')])
 assert.equal(notifications.length, osBefore2 + 1, 're-enabled notifications must fire for new reports')
 
+// 12. The OFF choice must SURVIVE a reload. This is the regression that matters:
+//     the switch appeared to save but reverted to on, because it wrote to
+//     `host.storage` (undefined) and the swallowed catch left the default.
+intervals = []
+listeners = []
+timeouts = []
+ctx = makeCtx()
+mod.default.register(ctx)
+await tick([item('default|a|1')])
+storage.set('notifications_enabled', false)
+
+// Simulate a fresh app load: new register(), same persisted store.
+intervals = []
+listeners = []
+timeouts = []
+ctx = makeCtx()
+mod.default.register(ctx)
+// Prime, then a new report arrives - it must stay silent because off persisted.
+await tick([item('default|a|1')])
+const osBeforeReload = notifications.length
+await tick([item('default|a|1'), item('default|a|30')])
+assert.equal(
+  notifications.length, osBeforeReload,
+  'notifications off did not survive a reload - the switch reverts to on'
+)
+
+// And the value really is readable from the store, not merely defaulted.
+assert.equal(
+  storage.get('notifications_enabled'), false,
+  'the off choice was never written to plugin storage'
+)
+
 // Guard against the file becoming a no-op.
 assert.ok(restCalls > 0, 'the watcher never called rest')
 assert.ok(notifications.length > 0, 'no OS notifications fired at all')
 assert.ok(toasts.length > 0, 'no in-app toasts fired at all')
 
 console.log(
-  `ok   11 watcher behaviours verified ` +
+  `ok   12 watcher behaviours verified ` +
   `(os=${notifications.length}, toast=${toasts.length}, rest=${restCalls}, stored=${storage.get('notified_unread_ids')?.length ?? 0})`
 )
